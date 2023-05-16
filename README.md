@@ -1,4 +1,4 @@
-# ScoreMD
+# ScoreMD shared by YUYANG WANG (Possible authorship)
 
 ScoreMD: Score-based Generative Model for Accelerating Molecular Dynamics Simulation
 
