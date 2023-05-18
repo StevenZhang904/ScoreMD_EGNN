@@ -12,12 +12,14 @@ from torch_geometric.data import Data
 from torch.utils.tensorboard import SummaryWriter
 
 from models.egnn import EGNN
-from dataset.data_spc import MDDatasetWrapper, SampleDatasetWrapper
+from dataset.data_spc import MDDatasetWrapper
+# from dataset.data_spc import MDDatasetWrapper, SampleDatasetWrapper
+
 from utils.ema import EMAHelper
 from utils.lr_sched import adjust_learning_rate
 from utils.md import get_neighbor
 from utils.denoising import get_beta_schedule, Normalizer, loss_registry
-
+# from utils.denoising import get_beta_schedule, Normalizer
 
 class Diffusion(object):
     def __init__(self, config):

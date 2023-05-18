@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch_geometric
 from torch_geometric.nn import global_add_pool
-
+import math
 
 def compute_alpha(beta, t):
     beta = torch.cat([torch.zeros(1).to(beta.device), beta], dim=0)
@@ -103,6 +103,18 @@ def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_time
     elif beta_schedule == "sigmoid":
         betas = np.linspace(-6, 6, num_diffusion_timesteps)
         betas = sigmoid(betas) * (beta_end - beta_start) + beta_start
+
+    elif beta_schedule == "cosine":
+        # alpha_bar: a lambda that takes t from 0 to 1 and produces the cumulative product of (1-beta)
+        # to that part of the diffusion process
+        alpha_bar = lambda t: math.cos((t + 0.008) / (1 + 0.008) * math.pi /2) ** 2
+        betas = []
+        for i in range(num_diffusion_timesteps):
+            t1 = i / num_diffusion_timesteps
+            t2 = (i+1) / num_diffusion_timesteps
+            max_beta = 0.999 # smaller than 1 to prevent singularities
+            betas.append(min(1-alpha_bar(t2) / alpha_bar(t1), max_beta))
+        betas = np.array(betas)
     else:
         raise NotImplementedError(beta_schedule)
     assert betas.shape == (num_diffusion_timesteps,)
@@ -132,40 +144,40 @@ class Normalizer(object):
         self.std = state_dict['std']
 
 
-# def noise_estimation_loss(model,
-#                           normalizer_disp,
-#                           normalizer_vel,
-#                           data: torch_geometric.data.Data,
-#                           t: torch.LongTensor,
-#                           e: torch.Tensor,
-#                           b: torch.Tensor, 
-#                           keepdim=False,
-#                           reduce_mean=True,
-#                           num_diffusion_timesteps=1000
-# ):
-#     x0 = data.disp
-#     a = (1-b).cumprod(dim=0).index_select(0, t).view(-1, 1) # reshape a to the correct shape based on PyG Data
-#     x = x0 * a.sqrt() + e * (1.0 - a).sqrt() # add noise to displacement
+def noise_estimation_loss(model,
+                          normalizer_disp,
+                          normalizer_vel,
+                          data: torch_geometric.data.Data,
+                          t: torch.LongTensor,
+                          e: torch.Tensor,
+                          b: torch.Tensor, 
+                          keepdim=False,
+                          reduce_mean=True,
+                          num_diffusion_timesteps=1000
+):
+    x0 = data.disp
+    a = (1-b).cumprod(dim=0).index_select(0, t).view(-1, 1) # reshape a to the correct shape based on PyG Data
+    x = x0 * a.sqrt() + e * (1.0 - a).sqrt() # add noise to displacement
 
-#     data.disp = normalizer_disp.norm(x)
-#     data.vel = normalizer_vel.norm(data.vel)
+    data.disp = normalizer_disp.norm(x)
+    data.vel = normalizer_vel.norm(data.vel)
 
-#     t = t.float()
-#     t *= 2 * np.pi / num_diffusion_timesteps
+    t = t.float()
+    t *= 2 * np.pi / num_diffusion_timesteps
 
-#     __, pred_e = model(data, t)
+    __, pred_e = model(data, t)
 
-#     if reduce_mean:
-#         loss = global_add_pool(e - pred_e, data.batch).square().mean(dim=1)
-#     else:
-#         loss = global_add_pool(e - pred_e, data.batch).square().sum(dim=1)
+    if reduce_mean:
+        loss = global_add_pool(e - pred_e, data.batch).square().mean(dim=1)
+    else:
+        loss = global_add_pool(e - pred_e, data.batch).square().sum(dim=1)
 
-#     if not keepdim:
-#         loss = loss.mean(dim=0)
+    if not keepdim:
+        loss = loss.mean(dim=0)
 
-#     return loss
+    return loss
 
 
-# loss_registry = {
-#     'simple': noise_estimation_loss,
-# }
+loss_registry = {
+    'simple': noise_estimation_loss,
+}
