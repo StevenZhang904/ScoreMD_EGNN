@@ -1,0 +1,46 @@
+gpu: '0,1'
+epochs: 500
+lr: 1e-4
+weight_decay: 0.0
+min_lr: 1e-7
+# warmup_epochs: 10
+# patience_epochs: 0
+load_model: None
+log_every_n_steps: 10
+
+diffusion:
+  type: "simple"
+  beta_schedule: linear
+  beta_start: 0.0001
+  beta_end: 0.02
+  num_diffusion_timesteps: 500
+  var_type: fixedsmall
+  ema_rate: 0.999
+  ema: True
+  sample_type: "generalized"
+  skip: 1
+  skip_type: "uniform"
+  timesteps: 20
+  eta: 0
+  
+model: 
+  # in_node_nf: 2
+  in_node_nf: 28
+  hidden_nf: 128
+  in_edge_nf: 1
+  n_layers: 4
+  residual: True
+  attention: True
+  normalize: True
+  tanh: False
+  auto_grad: False
+  cutoff: 5.0
+  max_nbr: 32
+
+dataset:
+  batch_size: 32
+  num_workers: 8
+  valid_size: 0.05
+  data_dir: '../water_1ns'
+  interval: 1
+  seed: 666
