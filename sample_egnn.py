@@ -108,6 +108,7 @@ class Sampler(object):
         for bn, data in enumerate(self.dataloader):
             data_init = data.to(self.device)
             break
+        ## TODO: why?
 
         self.data_curr = deepcopy(data_init)
 

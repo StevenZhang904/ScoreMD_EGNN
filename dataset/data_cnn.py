@@ -11,42 +11,47 @@ from PIL import Image
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
-
-from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader as PyGDataLoader
-
+from torchvision import transforms
 from torchvision.io import read_image
 
 
-class DiffusionDataset(Dataset):
-    def __init__(self, sys_data_dir: str, mem_data_dir: str):
-        super(DiffusionDataset, self).__init__()
+class CNN_Dataset(Dataset):
+    def __init__(self, sys_data_dir: str, mem_data_dir: str, transform = None):
+        super(CNN_Dataset, self).__init__()
         self.sys_data_dir = sys_data_dir
         self.mem_data_dir = mem_data_dir ### In images (png) format
+        self.transform = transform
 
-        imgs, labels = [], []
-        sys_data = pd.read_csv("./sys_data.csv")
-        water_counts = torch.tensor(sys_data["num_water"].values)
-        sys_file_names = torch.tensor(sys_data["sys_file_name"].values)
-
+        self.imgs_dir, labels = [], []
+        sys_data = pd.read_csv(self.sys_data_dir)
+        water_counts = torch.tensor(sys_data["water_counts"].values) 
+        sys_file_names = sys_data["sys_filename"].values
         mem_img_list = os.listdir(mem_data_dir)
 
         for x in range(len(sys_file_names)):
             sys_file_name = sys_file_names[x]
             for y in mem_img_list:
                 if sys_file_name == y[:-4]:
-                    img = read_image(mem_data_dir+y)
-                    imgs.append(img)
+                    img_dir = mem_data_dir+y
+                    self.imgs_dir.append(img_dir)
                     labels.append(water_counts[x])
 
-        
-        
+        self.labels = np.array(labels, dtype = np.float32)
+        self.len = len(self.labels)
 
-
+    def __len__(self):
+        return self.len
     
     def __getitem__(self, index):
-        img = 
-        
+        img = Image.open(self.imgs_dir[index])
+        img = img.convert("RGB")
+        img = self.transform(img)
+        img = np.array(img) / 255.0
+        img = np.moveaxis(img, 2, 0)
+        img = torch.from_numpy(img).type(torch.FloatTensor)
+        label = self.labels[index]
+        return img , label
+    
 
 
 
