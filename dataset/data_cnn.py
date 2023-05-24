@@ -44,6 +44,7 @@ class CNN_Dataset(Dataset):
     
     def __getitem__(self, index):
         img = Image.open(self.imgs_dir[index])
+        ## Raw images has four channels, converted to RGB to become 3 channels
         img = img.convert("RGB")
         img = self.transform(img)
         img = np.array(img) / 255.0

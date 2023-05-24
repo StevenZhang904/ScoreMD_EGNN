@@ -8,23 +8,43 @@ import torchvision
 from torchvision import transforms
 from torch.optim import Adam, lr_scheduler
 from torch.utils.data import Dataset, DataLoader
-
+from tqdm import tqdm
 from dataset.data_cnn import CNN_Dataset
 import time 
 
 
-class ResidualBlock(nn.Module):
-    def __init__(self, in_dim):
-        super(ResidualBlock, self).__init__()
-        self.main = nn.Sequential(
-            nn.Linear(in_dim, in_dim, bias=False),
-            nn.ReLU(),
-            nn.BatchNorm1d(in_dim),
-            nn.Linear(in_dim, in_dim, bias=False),
-        )
+# class ResidualBlock(nn.Module):
+#     def __init__(self, in_dim):
+#         super(ResidualBlock, self).__init__()
+#         self.main = nn.Sequential(
+#             nn.Linear(in_dim, in_dim, bias=False),
+#             nn.ReLU(),
+#             nn.BatchNorm1d(in_dim),
+#             nn.Linear(in_dim, in_dim, bias=False),
+#         )
 
-    def forward(self, x):
-        return x + self.main(x)
+#     def forward(self, x):
+#         return x + self.main(x)
+
+
+# class MLP(nn.Module):
+#     def __init__(self, in_size):
+#         super(MLP, self).__init__()
+
+#         self.model = nn.Sequential(
+#             nn.Linear(in_size, 256),
+#             nn.ReLU(),
+#             ResidualBlock(256),
+#             nn.Linear(256, 64),
+#             nn.ReLU(),
+#             ResidualBlock(64),
+#             nn.ReLU(),
+#         )
+#         self.output = nn.Linear(64, 1)
+    
+#     def forward(self, x):
+#         out = self.model(x)
+#         return self.output(out), out
 
 
 class MLP(nn.Module):
@@ -32,12 +52,13 @@ class MLP(nn.Module):
         super(MLP, self).__init__()
 
         self.model = nn.Sequential(
-            nn.Linear(in_size, 256),
+            nn.Linear(in_size, 512),
             nn.ReLU(),
-            ResidualBlock(256),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU(),
             nn.Linear(256, 64),
-            nn.ReLU(),
-            ResidualBlock(64),
             nn.ReLU(),
         )
         self.output = nn.Linear(64, 1)
@@ -46,18 +67,16 @@ class MLP(nn.Module):
         out = self.model(x)
         return self.output(out), out
 
-
 def train():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("device:", device)
     # torch.cuda.empty_cache()
 
-    overhead_timer = time.time()
-
-    batch_size = 256
-    lr_mlp = 0.001
+    batch_size = 512
+    lr_mlp = 0.0005
     lr_resnet = 0.0001
-    num_epochs = 100
+
+    num_epochs = 200
     generator = torch.Generator().manual_seed(1234)
 
     transform = transforms.Compose([
@@ -71,22 +90,24 @@ def train():
         transform= transform
     )
 
-    train_size = int(0.8 * len(CNN_Data))
+    train_size = int(0.5 * len(CNN_Data))
     test_size = len(CNN_Data) - train_size
     train_dataset, test_dataset = torch.utils.data.random_split(CNN_Data, [train_size, test_size])
-
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=6)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=6)
     print('training set size:', len(train_dataset))
     print('testing set size:', len(test_dataset))
 
     resnet = torchvision.models.resnet18(pretrained=True).to(device)
+    for name, p in resnet.named_parameters():
+        p.requires_grad = False
     mlp = MLP(in_size=1000).to(device)
-    # print(resnet)
+    print(resnet)
     # print(mlp)
 
     ct = 0
     for child in resnet.children():
+        print("resnet child",child)
         ct += 1
         if ct < 6:
             for param in child.parameters():
@@ -97,24 +118,20 @@ def train():
     optim_mlp = Adam(mlp.parameters(), lr=lr_mlp)
     optim_resnet = Adam(resnet.parameters(), lr=lr_resnet)
 
-    mlp_lr_scheduler = lr_scheduler.MultiStepLR(optim_mlp, gamma=0.1, milestones=[400])
-    resnet_lr_scheduler = lr_scheduler.MultiStepLR(optim_resnet, gamma=0.1, milestones=[400])
+    mlp_lr_scheduler = lr_scheduler.MultiStepLR(optim_mlp,gamma=0.5, milestones=[5, 10, 40, 60, 80])
+    # resnet_lr_scheduler = lr_scheduler.MultiStepLR(optim_resnet, gamma=0.1, milestones=[400])
 
     train_losses, test_losses = [], []
-    print("overhead time cost = ", time.time()-overhead_timer)
 
     for epoch in range(num_epochs):
-        epoch_timer = time.time()
+        start = time.time()
         acc_train_loss = 0.0
 
-        train_timer = time.time()
         resnet.train()
         mlp.train()
-        train_duration = time.time() - train_timer
 
         for i, (img, label) in enumerate(train_dataloader):
 
-            start = time.time()
 
             img, label = img.to(device), label.to(device)
             if len(label.shape) == 1:
@@ -122,6 +139,8 @@ def train():
             
             feat = resnet(img)
             pred, __ = mlp(feat)
+            if i == 0:
+                print(pred[0], label[0])
 
             optim_mlp.zero_grad()
             optim_resnet.zero_grad()
@@ -130,92 +149,91 @@ def train():
             acc_train_loss += loss.item()
             optim_mlp.step()
             optim_resnet.step()
-
             torch.cuda.empty_cache()
-            img_duration = time.time() - start
 
         train_losses.append(acc_train_loss/(i+1))
 
         # lr decay
         mlp_lr_scheduler.step()
-        resnet_lr_scheduler.step()
+        # resnet_lr_scheduler.step()
         
 
         # validation on test data
-        eval_timer = time.time()
-        resnet.eval()
-        mlp.eval()
-        predictions = np.zeros(len(test_dataset))
-        labels = np.zeros(len(test_dataset))
-        start_idx, end_idx = 0, 0
-        acc_test_loss = 0.0
-        eval_duration = time.time()-eval_timer
-        # with torch.no_grad():
-        for i, (img, label) in enumerate(test_dataloader):
-            img, label = img.to(device), label.to(device)
-            if len(label.shape) == 1:
-                label = torch.unsqueeze(label, 1)
-            batch_size = label.shape[0]
-            end_idx += batch_size
+
+        # resnet.eval()
+        # mlp.eval()
+        # predictions = np.zeros(len(test_dataset))
+        # labels = np.zeros(len(test_dataset))
+        # start_idx, end_idx = 0, 0
+        # acc_test_loss = 0.0
+        # # with torch.no_grad():
+
+        # for i, (img, label) in enumerate(test_dataloader):
+        #     img, label = img.to(device), label.to(device)
+        #     if len(label.shape) == 1:
+        #         label = torch.unsqueeze(label, 1)
+        #     batch_size = label.shape[0]
+        #     end_idx += batch_size
             
-            feat = resnet(img)
-            pred, __ = mlp(feat)
+        #     feat = resnet(img)
+        #     pred, __ = mlp(feat)
 
-            loss = loss_func(pred, label)
-            acc_test_loss += loss.item()
+        #     loss = loss_func(pred, label)
+        #     acc_test_loss += loss.item()
 
-            if device == 'cpu':
-                pred = pred.detach().numpy()
-                label = label.detach().numpy()
-            else:
-                pred = pred.detach().cpu().numpy()
-                label = label.detach().cpu().numpy()
+        #     if device == 'cpu':
+        #         pred = pred.detach().numpy()
+        #         label = label.detach().numpy()
+        #     else:
+        #         pred = pred.detach().cpu().numpy()
+        #         label = label.detach().cpu().numpy()
 
-            predictions[start_idx:end_idx] = np.squeeze(pred)
-            labels[start_idx:end_idx] = np.squeeze(label)
-            start_idx = end_idx
+        #     predictions[start_idx:end_idx] = np.squeeze(pred)
+        #     labels[start_idx:end_idx] = np.squeeze(label)
+        #     start_idx = end_idx
                 
-        test_losses.append(acc_test_loss/(i+1))
-        epoch_duration = time.time() - epoch_timer
-        print("epoch: {}, training Loss: {}, testing loss: {}, for each image time: {}, epoch time: {}, train time: {}, eval time: {}".format(
-            epoch, train_losses[-1], test_losses[-1], img_duration, epoch_duration, train_duration, eval_duration))
-
+        # test_losses.append(acc_test_loss/(i+1))
+        # print("epoch: {}, training Loss: {}, testing loss: {}".format(
+        #     epoch, train_losses[-1], test_losses[-1]))
+        epoch_duration = time.time() - start
+        print("epoch: {}, training Loss: {}, epoch time: {}".format(
+            epoch, train_losses[-1], epoch_duration))
         # print("epoch: {}, training Loss: {}".format(epoch, train_losses[-1]))
 
     model_dir = './models'
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
-    torch.save(mlp.state_dict(), os.path.join(model_dir, 'mlp_new_{}.ckpt'.format(obj)))
-    torch.save(resnet.state_dict(), os.path.join(model_dir, 'resnet_new_{}.ckpt'.format(obj)))
+    torch.save(mlp.state_dict(), os.path.join(model_dir, 'mlp_new.ckpt'))
+    torch.save(resnet.state_dict(), os.path.join(model_dir, 'resnet_new.ckpt'))
     # torch.save(cnn.state_dict(), os.path.join(model_dir, 'cnn.ckpt'))
 
     resnet.eval()
     mlp.eval()
 
     # validation on train data
-    train_predictions = np.zeros(len(train_dataset))
-    train_labels = np.zeros(len(train_dataset))
-    start_idx, end_idx = 0, 0
-    for i, (img, label) in enumerate(train_dataloader):
-        img, label = img.to(device), label.to(device)
-        if len(label.shape) == 1:
-            label = torch.unsqueeze(label, 1)
-        batch_size = label.shape[0]
-        end_idx += batch_size
+    # train_predictions = np.zeros(len(train_dataset))
+    # train_labels = np.zeros(len(train_dataset))
+    # start_idx, end_idx = 0, 0
+    # for i, (img, label) in enumerate(train_dataloader):
+    #     img, label = img.to(device), label.to(device)
+    #     if len(label.shape) == 1:
+    #         label = torch.unsqueeze(label, 1)
+    #     batch_size = label.shape[0]
+    #     end_idx += batch_size
         
-        feat = resnet(img)
-        pred, __ = mlp(feat)
+    #     feat = resnet(img)
+    #     pred, __ = mlp(feat)
 
-        if device == 'cpu':
-            pred = pred.detach().numpy()
-            label = label.detach().numpy()
-        else:
-            pred = pred.detach().cpu().numpy()
-            label = label.detach().cpu().numpy()
+    #     if device == 'cpu':
+    #         pred = pred.detach().numpy()
+    #         label = label.detach().numpy()
+    #     else:
+    #         pred = pred.detach().cpu().numpy()
+    #         label = label.detach().cpu().numpy()
 
-        train_predictions[start_idx:end_idx] = np.squeeze(pred)
-        train_labels[start_idx:end_idx] = np.squeeze(label)
-        start_idx = end_idx
+    #     train_predictions[start_idx:end_idx] = np.squeeze(pred)
+    #     train_labels[start_idx:end_idx] = np.squeeze(label)
+    #     start_idx = end_idx
 
     # validation on test data
     # test_predictions = np.zeros(len(test_dataset))
@@ -268,9 +286,9 @@ def train():
         test_labels[start_idx:end_idx] = np.squeeze(label)
         start_idx = end_idx
 
-    print("MSE on training set:", np.mean(np.square(train_predictions - train_labels)))
+    # print("MSE on training set:", np.mean(np.square(train_predictions - train_labels)))
     print("MSE on testing set:", np.mean(np.square(test_predictions - test_labels)))
-    print("L1 error on training set:", np.mean(np.abs(train_predictions - train_labels)))
+    # print("L1 error on training set:", np.mean(np.abs(train_predictions - train_labels)))
     print("L1 error on testing set:", np.mean(np.abs(test_predictions - test_labels)))
 
 
@@ -281,14 +299,14 @@ def train():
     x = np.linspace(np.min(test_dataset.labels), np.max(train_dataset.labels))
     y = np.linspace(np.min(test_dataset.labels), np.max(train_dataset.labels))
     plt.figure()
-    plt.scatter(train_predictions, train_labels, c='blue', marker='x')
-    plt.scatter(predictions, labels, c='red', marker='x')
+    plt.scatter(test_predictions, test_labels, c='blue', marker='x')
+    # plt.scatter(predictions, labels, c='red', marker='x')
     plt.plot(x, y, linestyle='dashed', c='black')
     plt.xlabel('prediction')
     plt.ylabel('label')
     plt.title('Flux prediction')
     # plt.show()
-    plt.savefig(os.path.join(plot_dir, 'pred_new_{}.png'.format(obj)))
+    plt.savefig(os.path.join(plot_dir, 'pred_new_{}.png'))
 
     # print(train_losses)
     # print(test_losses)
@@ -298,7 +316,7 @@ def train():
     plt.xlabel('epoch')
     plt.ylabel('loss')
     plt.legend(['training loss', 'testing loss'])
-    plt.savefig(os.path.join(plot_dir, 'loss_new_{}.png'.format(obj)))
+    plt.savefig(os.path.join(plot_dir, 'loss_new_{}.png'))
 
 
 if __name__ == "__main__":
