@@ -48,8 +48,14 @@ import time
 
 
 class MLP(nn.Module):
-    def __init__(self, in_size):
+    def __init__(self, in_size, zDim = 1):
         super(MLP, self).__init__()
+
+        self.enc_mu_FC1 = nn.Linear(in_size, 256)
+        self.enc_mu_FC2 = nn.Linear(256, zDim)
+        self.enc_var_FC1 = nn.Linear(in_size, 256)
+        self.enc_var_FC2 = nn.Linear(256, zDim)
+        self.relu = nn.ReLU()
 
         self.model = nn.Sequential(
             nn.Linear(in_size, 512),
@@ -64,8 +70,18 @@ class MLP(nn.Module):
         self.output = nn.Linear(64, 1)
     
     def forward(self, x):
-        out = self.model(x)
-        return self.output(out), out
+        mu = self.enc_mu_FC1(x)
+        mu = self.relu(mu)
+        mu = self.enc_mu_FC2(mu)
+
+        logVar = self.enc_var_FC1(x)
+        logVar = self.relu(logVar)
+        logVar = self.enc_var_FC2(logVar)
+        return mu, logVar
+
+    # def forward(self, x):
+    #     out = self.model(x)
+    #     return self.output(out), out
 
 def train():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -73,11 +89,10 @@ def train():
     # torch.cuda.empty_cache()
 
     batch_size = 512
-    lr_mlp = 0.0005
+    lr_mlp = 0.00005
     lr_resnet = 0.0001
 
-    num_epochs = 200
-    generator = torch.Generator().manual_seed(1234)
+    num_epochs = 15
 
     transform = transforms.Compose([
         transforms.CenterCrop((380, 380)),
@@ -98,22 +113,22 @@ def train():
     print('training set size:', len(train_dataset))
     print('testing set size:', len(test_dataset))
 
-    resnet = torchvision.models.resnet18(pretrained=True).to(device)
+    resnet = torchvision.models.resnet18(pretrained = True).to(device)
     for name, p in resnet.named_parameters():
         p.requires_grad = False
     mlp = MLP(in_size=1000).to(device)
-    print(resnet)
+    # print(resnet)
     # print(mlp)
 
     ct = 0
     for child in resnet.children():
-        print("resnet child",child)
-        ct += 1
-        if ct < 6:
-            for param in child.parameters():
-                param.requires_grad = False
+        # print("resnet child",child)
+        # ct += 1
+        # if ct < 7:
+        for param in child.parameters():
+            param.requires_grad = False
 
-    loss_func = nn.MSELoss(reduction='mean')
+    # loss_func = nn.MSELoss(reduction='mean')
     # loss_func = nn.SmoothL1Loss(reduction='mean')
     optim_mlp = Adam(mlp.parameters(), lr=lr_mlp)
     optim_resnet = Adam(resnet.parameters(), lr=lr_resnet)
@@ -138,17 +153,28 @@ def train():
                 label = torch.unsqueeze(label, 1)
             
             feat = resnet(img)
-            pred, __ = mlp(feat)
-            if i == 0:
-                print(pred[0], label[0])
+            # pred, __ = mlp(feat)
+
+            mu, logVar = mlp(feat)
+            std = torch.exp(logVar/2)
+            m = torch.distributions.Normal(mu, std)
+            # print(mu, mu.shape)
+            # print(std, std.shape)
+            loss = -m.log_prob(label)
+            # print("label", label)
+            # print("label shape", label.shape)
+            # print(loss, loss.shape)
+
+            # if i == 0:
+            #     print(pred[0], label[0])
 
             optim_mlp.zero_grad()
-            optim_resnet.zero_grad()
-            loss = loss_func(pred, label)
-            loss.backward()
-            acc_train_loss += loss.item()
+            # optim_resnet.zero_grad()
+            # loss = loss_func(pred, label)
+            loss.mean().backward()
+            acc_train_loss += loss.mean().item()
             optim_mlp.step()
-            optim_resnet.step()
+            # optim_resnet.step()
             torch.cuda.empty_cache()
 
         train_losses.append(acc_train_loss/(i+1))
