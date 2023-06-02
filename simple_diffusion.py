@@ -55,7 +55,7 @@ class DiffusionModel(nn.Module):
         self.posterior_variance = self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)
 
     def q_sample(self, x_start, t, noise=None):
-        # forward diffusion (using the nice property)
+        # forwarddiffusion  (using the nice property)
         # x_t  = sqrt(alphas_cumprod)*x_0 + sqrt(1 - alphas_cumprod)*z_t
         if noise is None:
             noise = torch.randn_like(x_start)
@@ -68,11 +68,15 @@ class DiffusionModel(nn.Module):
         return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
     def compute_loss(self, x_start, t, noise=None, loss_type="l2"):
+        # print("noise =", noise)
+        # print("noise.shape = ", noise.shape)
         if noise is None:
             noise = torch.randn_like(x_start)
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        # print("x_noisy= ", x_noisy, "its shape = ", x_noisy.shape)
         predicted_noise = self.denoise_model(x_noisy, t)
+        # print("predicted_noise = ,", predicted_noise, "its shape = ", predicted_noise.shape)
 
         if loss_type == 'l1':
             loss = F.l1_loss(noise, predicted_noise)
@@ -110,49 +114,58 @@ class DiffusionModel(nn.Module):
     def p_sample_loop(self, shape):
         device = next(self.denoise_model.parameters()).device
 
-        b = shape[0]
+        b = shape[0] ### b = batch_size
         # start from pure noise (for each example in the batch)
-        img = torch.randn(shape, device=device)
-        imgs = []
+        displacement = torch.randn(shape, device=device)
+        displacements = []
 
         for i in tqdm(reversed(range(0, self.timesteps)), desc='sampling loop time step', total=self.timesteps):
-            img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long), i)
-            imgs.append(img.cpu().numpy())
-        return imgs
+            displacement = self.p_sample(displacement, torch.full((b,), i, device=device, dtype=torch.long), i)
+            displacements.append(displacement.cpu().numpy())
+        return displacements
 
     @torch.no_grad()
-    def sample(self, image_size, batch_size=16, channels=3):
-        return self.p_sample_loop(shape=(batch_size, channels, image_size, image_size))
+    def sample(self, displacement_shape, batch_size=16):
+        return self.p_sample_loop(shape=(batch_size, displacement_shape))
 
-    def forward(self, mode, **kwargs):
+    # def forward(self, mode, **kwargs):
+    #     if mode == "train":
+    #         # 先判断必须参数
+    #         if "x_start" and "t" in kwargs.keys():
+    #             # 接下来判断一些非必选参数
+    #             if "loss_type" and "noise" in kwargs.keys():
+    #                 return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"],
+    #                                          noise=kwargs["noise"], loss_type=kwargs["loss_type"])
+    #             elif "loss_type" in kwargs.keys():
+    #                 return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"], loss_type=kwargs["loss_type"])
+    #             elif "noise" in kwargs.keys():
+    #                 return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"], noise=kwargs["noise"])
+    #             else:
+    #                 return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"])
+
+    #         else:
+    #             raise ValueError("扩散模型在训练时必须传入参数x_start和t！")
+
+    #     elif mode == "generate":
+    #         if "image_size" and "batch_size" and "channels" in kwargs.keys():
+    #             return self.sample(image_size=kwargs["image_size"],
+    #                                batch_size=kwargs["batch_size"],
+    #                                channels=kwargs["channels"])
+    #         else:
+    #             raise ValueError("扩散模型在生成图片时必须传入image_size, batch_size, channels等三个参数")
+    #     else:
+    #         raise ValueError("mode参数必须从{train}和{generate}两种模式中选择")
+    def forward(self, mode, x_start, t):
         if mode == "train":
-            # 先判断必须参数
-            if "x_start" and "t" in kwargs.keys():
-                # 接下来判断一些非必选参数
-                if "loss_type" and "noise" in kwargs.keys():
-                    return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"],
-                                             noise=kwargs["noise"], loss_type=kwargs["loss_type"])
-                elif "loss_type" in kwargs.keys():
-                    return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"], loss_type=kwargs["loss_type"])
-                elif "noise" in kwargs.keys():
-                    return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"], noise=kwargs["noise"])
-                else:
-                    return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"])
-
-            else:
-                raise ValueError("扩散模型在训练时必须传入参数x_start和t！")
-
-        elif mode == "generate":
-            if "image_size" and "batch_size" and "channels" in kwargs.keys():
-                return self.sample(image_size=kwargs["image_size"],
-                                   batch_size=kwargs["batch_size"],
-                                   channels=kwargs["channels"])
-            else:
-                raise ValueError("扩散模型在生成图片时必须传入image_size, batch_size, channels等三个参数")
+            loss_type = "l2"
+            t = t
+            noise = torch.randn_like(x_start)
+            return self.compute_loss(x_start, t, noise, loss_type)
         else:
-            raise ValueError("mode参数必须从{train}和{generate}两种模式中选择")
+            raise NotImplementedError
 
-    def cosine_beta_schedule(timesteps, s=0.008):
+
+    def cosine_beta_schedule(self, timesteps, s=0.008):
         """
         cosine schedule as proposed in https://arxiv.org/abs/2102.09672
         """
@@ -163,306 +176,209 @@ class DiffusionModel(nn.Module):
         betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
         return torch.clip(betas, 0.0001, 0.9999)
 
+class SinusoidalPositionEmbeddings(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
 
+    def forward(self, time):
+        device = time.device
+        half_dim = self.dim // 2
+        embeddings = math.log(10000) / (half_dim - 1)
+        embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings)
+        embeddings = time[:, None] * embeddings[None, :]
+        embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
+        return embeddings
 
+class Encoder(nn.Module):
+    ''' This the encoder part of VAE
 
+    '''
+    def __init__(self, input_dim, hidden_dim, z_dim):
+        '''
+        Args:
+            input_dim: A integer indicating the size of input (in case of MNIST 28 * 28).
+            hidden_dim: A integer indicating the size of hidden dimension.
+            z_dim: A integer indicating the latent dimension.
+        '''
+        super().__init__()
 
-class MLP(nn.Module):
-    def __init__(self, in_size, zDim = 1):
-        super(MLP, self).__init__()
+        self.linear = nn.Linear(input_dim, hidden_dim)
+        self.mu = nn.Linear(hidden_dim, z_dim)
+        self.var = nn.Linear(hidden_dim, z_dim)
 
-        self.enc_mu_FC1 = nn.Linear(in_size, 256)
-        self.enc_mu_FC2 = nn.Linear(256, zDim)
-        self.enc_var_FC1 = nn.Linear(in_size, 256)
-        self.enc_var_FC2 = nn.Linear(256, zDim)
-        self.relu = nn.ReLU()
-
-        self.model = nn.Sequential(
-            nn.Linear(in_size, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, 64),
-            nn.ReLU(),
-        )
-        self.output = nn.Linear(64, 1)
-    
     def forward(self, x):
-        mu = self.enc_mu_FC1(x)
-        mu = self.relu(mu)
-        mu = self.enc_mu_FC2(mu)
+        # x is of shape [batch_size, input_dim]
 
-        logVar = self.enc_var_FC1(x)
-        logVar = self.relu(logVar)
-        logVar = self.enc_var_FC2(logVar)
-        return mu, logVar
+        hidden = F.relu(self.linear(x))
+        # hidden is of shape [batch_size, hidden_dim]
+        z_mu = self.mu(hidden)
+        # z_mu is of shape [batch_size, latent_dim]
+        z_var = self.var(hidden)
+        # z_var is of shape [batch_size, latent_dim]
+
+        return z_mu, z_var
+
+
+class Decoder(nn.Module):
+        ''' This the decoder part of VAE
+
+        '''
+        def __init__(self, z_dim, hidden_dim, output_dim):
+            '''
+            Args:
+                z_dim: A integer indicating the latent size.
+                hidden_dim: A integer indicating the size of hidden dimension.
+                output_dim: A integer indicating the output dimension (in case of MNIST it is 28 * 28)
+            '''
+            super().__init__()
+
+            self.linear = nn.Linear(z_dim, hidden_dim)
+            self.out = nn.Linear(hidden_dim, output_dim)
+
+        def forward(self, x):
+            # x is of shape [batch_size, latent_dim]
+
+            hidden = F.relu(self.linear(x))
+            # hidden is of shape [batch_size, hidden_dim]
+
+            predicted = torch.sigmoid(self.out(hidden))
+            # predicted is of shape [batch_size, output_dim]
+
+            return predicted
+
+
+class VAE(nn.Module):
+        ''' This the VAE, which takes a encoder and decoder.
+
+        '''
+        def __init__(self, enc, dec):
+            super().__init__()
+
+            # self.in_size = in_size
+            # self.out_size = out_size
+
+            # self.time_mlp = nn.Sequential(
+            #     SinusoidalPositionEmbeddings(in_size),
+            #     nn.Linear(in_size, in_size*4),
+            #     nn.GELU(),
+            #     nn.Linear(in_size*4, in_size*4),
+            # )
+            # self.t = self.time_mlp(time)
+            self.enc = enc
+            self.dec = dec
+
+        def forward(self, x, t=None):
+            # encode
+
+            z_mu, z_var = self.enc(x)
+
+            # sample from the distribution having latent parameters z_mu, z_var
+            # reparameterize
+            std = torch.exp(z_var / 2)
+            eps = torch.randn_like(std)
+            x_sample = eps.mul(std).add_(z_mu)
+
+            # decode
+            predicted = self.dec(x_sample)
+            # return predicted, z_mu, z_var
+            return predicted
+
+class Denoise_model(nn.Module):
+    def __init__(self, in_size, out_size = 18, time = None):
+        super(Denoise_model, self).__init__()
+        self.in_size = in_size
+        self.out_size = out_size
+
+        # self.time_mlp = nn.Sequential(
+        #     SinusoidalPositionEmbeddings(in_size),
+        #     nn.Linear(in_size, in_size*4),
+        #     nn.GELU(),
+        #     nn.Linear(in_size*4, in_size*4),
+        # )
+        # t = self.time_mlp(time)
+
+        # self.model = nn.Sequential(
+        #     nn.Linear(self.in_size, 512),
+        #     nn.ReLU(),
+        #     nn.Linear(512, 1024),
+        #     nn.ReLU(),
+        #     nn.Linear(1024, 2048),
+        #     nn.ReLU(),
+        #     nn.Linear(2048, 512),
+        #     nn.ReLU(),
+        # )
+        # self.output = nn.Linear(512, self.out_size)
+
+
+     
+    def forward(self, x):
+        res = self.model(x)
+        res = self.output(res)
+        return res
 
     # def forward(self, x):
     #     out = self.model(x)
     #     return self.output(out), out
 
 def train():
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    print("device:", device)
     # torch.cuda.empty_cache()
 
-    batch_size = 512
-    lr_mlp = 0.00005
-    lr_resnet = 0.0001
+    batch_size = 256
 
-    num_epochs = 15
 
-    transform = transforms.Compose([
-        transforms.CenterCrop((380, 380)),
-        transforms.Resize((224, 224)),
-    ])
-
-    CNN_Data = CNN_Dataset(
-        sys_data_dir='/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/sys_data.csv', 
-        mem_data_dir='/home/cmu/Desktop/Summer_research/memb_img/', 
-        transform= transform
+    Diffusion_Data = Diffusion_Dataset(
+        data_dir = "/home/cmu/Desktop/Summer_research/position_data_2.csv",
+        sys_dir = "/home/cmu/Desktop/Summer_research/sys_pdb/",
+        name = "circular_22_",
     )
-
-    train_size = int(0.5 * len(CNN_Data))
-    test_size = len(CNN_Data) - train_size
-    train_dataset, test_dataset = torch.utils.data.random_split(CNN_Data, [train_size, test_size])
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=6)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=6)
+    train_size = int(0.8 * len(Diffusion_Data))
+    test_size = len(Diffusion_Data) - train_size
+    train_dataset, test_dataset = torch.utils.data.random_split(Diffusion_Data, [train_size, test_size])
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
     print('training set size:', len(train_dataset))
     print('testing set size:', len(test_dataset))
 
-    resnet = torchvision.models.resnet18(pretrained = True).to(device)
-    for name, p in resnet.named_parameters():
-        p.requires_grad = False
-    mlp = MLP(in_size=1000).to(device)
-    # print(resnet)
-    # print(mlp)
-
-    ct = 0
-    for child in resnet.children():
-        # print("resnet child",child)
-        # ct += 1
-        # if ct < 7:
-        for param in child.parameters():
-            param.requires_grad = False
-
-    # loss_func = nn.MSELoss(reduction='mean')
-    # loss_func = nn.SmoothL1Loss(reduction='mean')
-    optim_mlp = Adam(mlp.parameters(), lr=lr_mlp)
-    optim_resnet = Adam(resnet.parameters(), lr=lr_resnet)
-
-    mlp_lr_scheduler = lr_scheduler.MultiStepLR(optim_mlp,gamma=0.5, milestones=[5, 10, 40, 60, 80])
-    # resnet_lr_scheduler = lr_scheduler.MultiStepLR(optim_resnet, gamma=0.1, milestones=[400])
-
+    encoder = Encoder(18, 256, 20)
+    decoder = Decoder(20, 256, 18)
     train_losses, test_losses = [], []
 
-    for epoch in range(num_epochs):
-        start = time.time()
-        acc_train_loss = 0.0
+    timesteps = 1000
+    epoches = 100
+    train_loader = train_dataloader
 
-        resnet.train()
-        mlp.train()
-
-        for i, (img, label) in enumerate(train_dataloader):
-
-
-            img, label = img.to(device), label.to(device)
-            if len(label.shape) == 1:
-                label = torch.unsqueeze(label, 1)
-            
-            feat = resnet(img)
-            # pred, __ = mlp(feat)
-
-            mu, logVar = mlp(feat)
-            std = torch.exp(logVar/2)
-            m = torch.distributions.Normal(mu, std)
-            # print(mu, mu.shape)
-            # print(std, std.shape)
-            loss = -m.log_prob(label)
-            # print("label", label)
-            # print("label shape", label.shape)
-            # print(loss, loss.shape)
-
-            # if i == 0:
-            #     print(pred[0], label[0])
-
-            optim_mlp.zero_grad()
-            # optim_resnet.zero_grad()
-            # loss = loss_func(pred, label)
-            loss.mean().backward()
-            acc_train_loss += loss.mean().item()
-            optim_mlp.step()
-            # optim_resnet.step()
-            torch.cuda.empty_cache()
-
-        train_losses.append(acc_train_loss/(i+1))
-
-        # lr decay
-        mlp_lr_scheduler.step()
-        # resnet_lr_scheduler.step()
-        
-
-        # validation on test data
-
-        # resnet.eval()
-        # mlp.eval()
-        # predictions = np.zeros(len(test_dataset))
-        # labels = np.zeros(len(test_dataset))
-        # start_idx, end_idx = 0, 0
-        # acc_test_loss = 0.0
-        # # with torch.no_grad():
-
-        # for i, (img, label) in enumerate(test_dataloader):
-        #     img, label = img.to(device), label.to(device)
-        #     if len(label.shape) == 1:
-        #         label = torch.unsqueeze(label, 1)
-        #     batch_size = label.shape[0]
-        #     end_idx += batch_size
-            
-        #     feat = resnet(img)
-        #     pred, __ = mlp(feat)
-
-        #     loss = loss_func(pred, label)
-        #     acc_test_loss += loss.item()
-
-        #     if device == 'cpu':
-        #         pred = pred.detach().numpy()
-        #         label = label.detach().numpy()
-        #     else:
-        #         pred = pred.detach().cpu().numpy()
-        #         label = label.detach().cpu().numpy()
-
-        #     predictions[start_idx:end_idx] = np.squeeze(pred)
-        #     labels[start_idx:end_idx] = np.squeeze(label)
-        #     start_idx = end_idx
-                
-        # test_losses.append(acc_test_loss/(i+1))
-        # print("epoch: {}, training Loss: {}, testing loss: {}".format(
-        #     epoch, train_losses[-1], test_losses[-1]))
-        epoch_duration = time.time() - start
-        print("epoch: {}, training Loss: {}, epoch time: {}".format(
-            epoch, train_losses[-1], epoch_duration))
-        # print("epoch: {}, training Loss: {}".format(epoch, train_losses[-1]))
-
-    model_dir = './models'
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
-    torch.save(mlp.state_dict(), os.path.join(model_dir, 'mlp_new.ckpt'))
-    torch.save(resnet.state_dict(), os.path.join(model_dir, 'resnet_new.ckpt'))
-    # torch.save(cnn.state_dict(), os.path.join(model_dir, 'cnn.ckpt'))
-
-    resnet.eval()
-    mlp.eval()
-
-    # validation on train data
-    # train_predictions = np.zeros(len(train_dataset))
-    # train_labels = np.zeros(len(train_dataset))
-    # start_idx, end_idx = 0, 0
-    # for i, (img, label) in enumerate(train_dataloader):
-    #     img, label = img.to(device), label.to(device)
-    #     if len(label.shape) == 1:
-    #         label = torch.unsqueeze(label, 1)
-    #     batch_size = label.shape[0]
-    #     end_idx += batch_size
-        
-    #     feat = resnet(img)
-    #     pred, __ = mlp(feat)
-
-    #     if device == 'cpu':
-    #         pred = pred.detach().numpy()
-    #         label = label.detach().numpy()
-    #     else:
-    #         pred = pred.detach().cpu().numpy()
-    #         label = label.detach().cpu().numpy()
-
-    #     train_predictions[start_idx:end_idx] = np.squeeze(pred)
-    #     train_labels[start_idx:end_idx] = np.squeeze(label)
-    #     start_idx = end_idx
-
-    # validation on test data
-    # test_predictions = np.zeros(len(test_dataset))
-    # test_labels = np.zeros(len(test_dataset))
-    # start_idx, end_idx = 0, 0
-    # for i, (img, label) in enumerate(train_dataloader):
-    #     img, label = img.to(device), label.to(device)
-    #     if len(label.shape) == 1:
-    #         label = torch.unsqueeze(label, 1)
-    #     batch_size = label.shape[0]
-    #     end_idx += batch_size
-    #     print(batch_size, start_idx, end_idx)
-        
-    #     feat = resnet(img)
-    #     pred = mlp(feat)
-
-    #     if device is 'cpu':
-    #         pred = pred.detach().numpy()
-    #         label = label.detach().numpy()
-    #     else:
-    #         pred = pred.detach().cpu().numpy()
-    #         label = label.detach().cpu().numpy()
-
-    #     test_predictions[start_idx:end_idx] = np.squeeze(pred)
-    #     test_labels[start_idx:end_idx] = np.squeeze(label)
-    #     start_idx = end_idx
-
-    test_predictions = np.zeros(len(test_dataset))
-    test_labels = np.zeros(len(test_dataset))
-
-    start_idx, end_idx = 0, 0
-    for i, (img, label) in enumerate(test_dataloader):
-        img, label = img.to(device), label.to(device)
-        if len(label.shape) == 1:
-            label = torch.unsqueeze(label, 1)
-        batch_size = label.shape[0]
-        end_idx += batch_size
-
-        feat = resnet(img)
-        pred, __ = mlp(feat)
-
-        if device == 'cpu':
-            pred = pred.detach().numpy()
-            label = label.detach().numpy()
-        else:
-            pred = pred.detach().cpu().numpy()
-            label = label.detach().cpu().numpy()
-
-        test_predictions[start_idx:end_idx] = np.squeeze(pred)
-        test_labels[start_idx:end_idx] = np.squeeze(label)
-        start_idx = end_idx
-
-    # print("MSE on training set:", np.mean(np.square(train_predictions - train_labels)))
-    print("MSE on testing set:", np.mean(np.square(test_predictions - test_labels)))
-    # print("L1 error on training set:", np.mean(np.abs(train_predictions - train_labels)))
-    print("L1 error on testing set:", np.mean(np.abs(test_predictions - test_labels)))
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    model_save_path = "/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/"
+    denoise_model = VAE(encoder, decoder).to(device)
+    lr = 0.0001
+    optimizer = Adam(denoise_model.parameters(), lr=lr)
+    model = DiffusionModel(timesteps=timesteps, denoise_model= denoise_model)
 
 
-    plot_dir = './plot'
-    if not os.path.exists(plot_dir):
-        os.makedirs(plot_dir)
-    
-    x = np.linspace(np.min(test_dataset.labels), np.max(train_dataset.labels))
-    y = np.linspace(np.min(test_dataset.labels), np.max(train_dataset.labels))
-    plt.figure()
-    plt.scatter(test_predictions, test_labels, c='blue', marker='x')
-    # plt.scatter(predictions, labels, c='red', marker='x')
-    plt.plot(x, y, linestyle='dashed', c='black')
-    plt.xlabel('prediction')
-    plt.ylabel('label')
-    plt.title('Flux prediction')
-    # plt.show()
-    plt.savefig(os.path.join(plot_dir, 'pred_new_{}.png'))
+    for i in range(epoches):
+        losses = []
+        loop = tqdm(enumerate(train_loader), total=len(train_loader))
+        for step, (features, labels) in loop:
+            features = features.to(device)
+            batch_size = features.shape[0]
 
-    # print(train_losses)
-    # print(test_losses)
-    plt.figure()
-    plt.plot(train_losses, c='blue')
-    plt.plot(test_losses, c='red')
-    plt.xlabel('epoch')
-    plt.ylabel('loss')
-    plt.legend(['training loss', 'testing loss'])
-    plt.savefig(os.path.join(plot_dir, 'loss_new_{}.png'))
+            # Algorithm 1 line 3: sample t uniformally for every example in the batch
+            t = torch.randint(0, timesteps, (batch_size,), device=device).long()
+
+            loss = model(mode="train", x_start=features, t=t)
+            losses.append(loss)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            # 更新信息
+            loop.set_description(f'Epoch [{i}/{epoches}]')
+            loop.set_postfix(loss=loss.item())
+        print("In epoch ", i, ", loss is ", losses[0])
+        torch.save(model.state_dict(), model_save_path+'BestModel.pth')
+        print("model saved to" + str(model_save_path))
 
 
 if __name__ == "__main__":
