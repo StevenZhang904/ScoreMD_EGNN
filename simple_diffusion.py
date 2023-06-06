@@ -13,6 +13,7 @@ from tqdm import tqdm
 from dataset.data_diffusion_demo import Diffusion_Dataset
 import time 
 import math
+from unet import Unet
 
 def extract(a, t, x_shape):
     """
@@ -30,13 +31,12 @@ def extract(a, t, x_shape):
 
 
 class DiffusionModel(nn.Module):
-    def __init__(self,timesteps=1000,denoise_model=None):
+    def __init__(self,timesteps=1000,denoise_model=None, loss_type = "l2"):
         super(DiffusionModel, self).__init__()
 
 
         self.denoise_model = denoise_model
-
-        # 方差生成
+        self.loss_type = loss_type
         self.timesteps = timesteps
         self.betas = self.cosine_beta_schedule(timesteps, s = 0.008)
         # define alphas
@@ -51,11 +51,10 @@ class DiffusionModel(nn.Module):
         self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod)
 
         # calculations for posterior q(x_{t-1} | x_t, x_0)
-        # 这里用的不是简化后的方差而是算出来的
         self.posterior_variance = self.betas * (1. - self.alphas_cumprod_prev) / (1. - self.alphas_cumprod)
 
     def q_sample(self, x_start, t, noise=None):
-        # forwarddiffusion  (using the nice property)
+        # forwarddiffusion  
         # x_t  = sqrt(alphas_cumprod)*x_0 + sqrt(1 - alphas_cumprod)*z_t
         if noise is None:
             noise = torch.randn_like(x_start)
@@ -77,7 +76,6 @@ class DiffusionModel(nn.Module):
         # print("x_noisy= ", x_noisy, "its shape = ", x_noisy.shape)
         predicted_noise = self.denoise_model(x_noisy, t)
         # print("predicted_noise = ,", predicted_noise, "its shape = ", predicted_noise.shape)
-
         if loss_type == 'l1':
             loss = F.l1_loss(noise, predicted_noise)
         elif loss_type == 'l2':
@@ -97,7 +95,6 @@ class DiffusionModel(nn.Module):
         sqrt_recip_alphas_t = extract(self.sqrt_recip_alphas, t, x.shape)
 
         # Equation 11 in the paper
-        # Use our model (noise predictor) to predict the mean
         model_mean = sqrt_recip_alphas_t * (
                 x - betas_t * self.denoise_model(x, t) / sqrt_one_minus_alphas_cumprod_t
         )
@@ -128,39 +125,13 @@ class DiffusionModel(nn.Module):
     def sample(self, displacement_shape, batch_size=16):
         return self.p_sample_loop(shape=(batch_size, displacement_shape))
 
-    # def forward(self, mode, **kwargs):
-    #     if mode == "train":
-    #         # 先判断必须参数
-    #         if "x_start" and "t" in kwargs.keys():
-    #             # 接下来判断一些非必选参数
-    #             if "loss_type" and "noise" in kwargs.keys():
-    #                 return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"],
-    #                                          noise=kwargs["noise"], loss_type=kwargs["loss_type"])
-    #             elif "loss_type" in kwargs.keys():
-    #                 return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"], loss_type=kwargs["loss_type"])
-    #             elif "noise" in kwargs.keys():
-    #                 return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"], noise=kwargs["noise"])
-    #             else:
-    #                 return self.compute_loss(x_start=kwargs["x_start"], t=kwargs["t"])
-
-    #         else:
-    #             raise ValueError("扩散模型在训练时必须传入参数x_start和t！")
-
-    #     elif mode == "generate":
-    #         if "image_size" and "batch_size" and "channels" in kwargs.keys():
-    #             return self.sample(image_size=kwargs["image_size"],
-    #                                batch_size=kwargs["batch_size"],
-    #                                channels=kwargs["channels"])
-    #         else:
-    #             raise ValueError("扩散模型在生成图片时必须传入image_size, batch_size, channels等三个参数")
-    #     else:
-    #         raise ValueError("mode参数必须从{train}和{generate}两种模式中选择")
-    def forward(self, mode, x_start, t):
+    def forward(self, mode, x_start, t, displacement_shape = None, batch_size = 256):
         if mode == "train":
-            loss_type = "l2"
             t = t
             noise = torch.randn_like(x_start)
-            return self.compute_loss(x_start, t, noise, loss_type)
+            return self.compute_loss(x_start, t, noise, self.loss_type)
+        elif mode == "generate":
+            return self.sample(displacement_shape=displacement_shape, batch_size=batch_size)
         else:
             raise NotImplementedError
 
@@ -242,16 +213,14 @@ class Decoder(nn.Module):
             hidden = F.relu(self.linear(x))
             # hidden is of shape [batch_size, hidden_dim]
 
-            predicted = torch.sigmoid(self.out(hidden))
+            predicted = (self.out(hidden))
             # predicted is of shape [batch_size, output_dim]
 
             return predicted
 
 
 class VAE(nn.Module):
-        ''' This the VAE, which takes a encoder and decoder.
 
-        '''
         def __init__(self, enc, dec):
             super().__init__()
 
@@ -324,7 +293,7 @@ class Denoise_model(nn.Module):
 def train():
     # torch.cuda.empty_cache()
 
-    batch_size = 256
+    batch_size = 1024
 
 
     Diffusion_Data = Diffusion_Dataset(
@@ -335,51 +304,60 @@ def train():
     train_size = int(0.8 * len(Diffusion_Data))
     test_size = len(Diffusion_Data) - train_size
     train_dataset, test_dataset = torch.utils.data.random_split(Diffusion_Data, [train_size, test_size])
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=7)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=7)
     print('training set size:', len(train_dataset))
     print('testing set size:', len(test_dataset))
-
-    encoder = Encoder(18, 256, 20)
-    decoder = Decoder(20, 256, 18)
+    
+    # hidden_dim = 1024
+    # zdim = 40
+    # encoder = Encoder(18, hidden_dim, zdim)
+    # decoder = Decoder(zdim, hidden_dim, 18)
     train_losses, test_losses = [], []
 
     timesteps = 1000
-    epoches = 100
-    train_loader = train_dataloader
+    epoches = 1000
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model_save_path = "/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/"
-    denoise_model = VAE(encoder, decoder).to(device)
+    # denoise_model = VAE(encoder, decoder).to(device)
+
+
+    denoise_model = Unet(
+        dim=image_size,
+        channels=channels,
+        dim_mults=dim_mults
+    )
     lr = 0.0001
     optimizer = Adam(denoise_model.parameters(), lr=lr)
-    model = DiffusionModel(timesteps=timesteps, denoise_model= denoise_model)
+    model = DiffusionModel(timesteps=timesteps, denoise_model= denoise_model, loss_type= "l1")
+    model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/BestModel.pth"))
 
-
-    for i in range(epoches):
+    for i in tqdm(range(epoches)):
         losses = []
-        loop = tqdm(enumerate(train_loader), total=len(train_loader))
-        for step, (features, labels) in loop:
+        for step, (features, labels) in enumerate(train_dataloader):
             features = features.to(device)
             batch_size = features.shape[0]
 
             # Algorithm 1 line 3: sample t uniformally for every example in the batch
             t = torch.randint(0, timesteps, (batch_size,), device=device).long()
 
-            loss = model(mode="train", x_start=features, t=t)
+            loss = model(mode="train", x_start=features, t=t )
             losses.append(loss)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            # 更新信息
-            loop.set_description(f'Epoch [{i}/{epoches}]')
-            loop.set_postfix(loss=loss.item())
-        print("In epoch ", i, ", loss is ", losses[0])
-        torch.save(model.state_dict(), model_save_path+'BestModel.pth')
-        print("model saved to" + str(model_save_path))
+        if i % 100 == 0:
+            print("In epoch ", i, ", loss is ", losses[0])
+            torch.save(model.state_dict(), model_save_path+'BestModel.pth')
+            print("model saved to" + str(model_save_path))
 
+    # with torch.no_grad():
+    #     model.eval()
+    # for step, (features, labels) in enumerate(test_dataloader):
+        
 
 if __name__ == "__main__":
     train()
