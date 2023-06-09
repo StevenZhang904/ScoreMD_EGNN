@@ -100,29 +100,31 @@ class DiffusionModel(nn.Module):
             return model_mean + torch.sqrt(posterior_variance_t) * noise
 
     @torch.no_grad()
-    def p_sample_loop(self, shape):
+    def p_sample_loop(self, shape, timesteps):
         device = next(self.denoise_model.parameters()).device
 
         b = shape[0] ### b = batch_size
         # start from pure noise (for each example in the batch)
+        print(shape)
         displacement = torch.randn(shape, device=device)
         displacements = []
 
-        for i in tqdm(reversed(range(0, self.timesteps)), desc='sampling loop time step', total=self.timesteps):
+        for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=self.timesteps):
             displacement = self.p_sample(displacement, torch.full((b,), i, device=device, dtype=torch.long), i)
             displacements.append(displacement.cpu().numpy())
         return displacements
 
     @torch.no_grad()
-    def sample(self, displacement_shape, batch_size=16):
-        return self.p_sample_loop(shape=(batch_size, displacement_shape))
+    def sample(self, displacement_shape, timesteps, batch_size=16):
+        return self.p_sample_loop(shape=(batch_size, displacement_shape), timesteps= timesteps)
 
-    def forward(self, mode, x_start, t, displacement_shape = None, batch_size = 256, noise_scale = 0.5):
+    def forward(self, mode, t = None, x_start = None, displacement_shape = None, batch_size = 256, noise_scale = 0.5, timesteps_sample = 1000):
         if mode == "train":
             noise = torch.randn_like(x_start) * noise_scale
             return self.compute_loss(x_start, t, noise, self.loss_type)
         elif mode == "generate":
-            return self.sample(displacement_shape=displacement_shape, batch_size=batch_size)
+            print("generating")
+            return self.sample(displacement_shape=displacement_shape, batch_size=batch_size, timesteps= timesteps_sample)
         else:
             raise NotImplementedError
 

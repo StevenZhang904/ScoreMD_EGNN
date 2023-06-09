@@ -32,8 +32,16 @@ class Diffusion_Dataset(Dataset):
                 displacements.append(np.zeros_like(pos))
             else:
                 displacement = pos - positions[x-1]
-                displacements.append(displacement)                
+                displacements.append(displacement)    
+
+        mean, std, var = np.mean(positions), np.std(positions), np.var(positions)
+        print(mean, std, var)
+        positions = (positions - mean)/std
+        mean, std, var = np.mean(positions), np.std(positions), np.var(positions)
+        print(mean, std, var)            
                 
+        ## TODO: normalize displacements if needed
+        
         self.positions = np.array(positions, dtype = np.float32)
         self.labels = np.array(displacements, dtype = np.float32)
         self.len = len(self.labels)

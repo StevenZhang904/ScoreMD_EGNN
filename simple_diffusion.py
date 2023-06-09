@@ -16,7 +16,14 @@ import time
 import math
 from unet import Unet
 
+
 class SinusoidalPositionEmbeddings(nn.Module):
+    '''
+    The SinusoidalPositionEmbeddings module takes a tensor of shape (batch_size, 1) 
+    as input (i.e. the noise levels of several noisy images in a batch), 
+    and turns this into a tensor of shape (batch_size, dim), 
+    with dim being the dimensionality of the position embeddings. 
+    '''
     def __init__(self, dim):
         super().__init__()
         self.dim = dim
@@ -98,7 +105,7 @@ def train():
     train_losses, test_losses = [], []
 
     timesteps = 3000
-    epoches = 2000
+    epoches = 10000
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model_save_path = "/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/"
@@ -116,12 +123,13 @@ def train():
     lr = 0.00001
 
     optimizer = Adam(denoise_model.parameters(), lr=lr)
-    noise_scale = 0.1
-    model = DiffusionModel(timesteps=timesteps, denoise_model = denoise_model, loss_type= "l1")
+    noise_scale = 0.5
+    model = DiffusionModel(timesteps=timesteps, denoise_model = denoise_model, loss_type= "l2")
     model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/BestModel_Diff.pth"))
 
     for i in tqdm(range(epoches)):
         losses = []
+        loss_temp = 0.0
         for step, (features, labels) in enumerate(train_dataloader):
             features = features.to(device)
             batch_size = features.shape[0]
@@ -137,16 +145,20 @@ def train():
             optimizer.step()
 
         if i % 100 == 0:
+
             print("In epoch ", i, ", loss is ", sum(losses)/len(losses))
-            torch.save(model.state_dict(), model_save_path+'BestModel_Diff.pth')
-            torch.save(denoise_model.state_dict(), model_save_path+'BestModel_MLP.pth')
+            if loss_temp > sum(losses)/len(losses):
+                torch.save(model.state_dict(), model_save_path+'BestModel_Diff.pth')
+                torch.save(denoise_model.state_dict(), model_save_path+'BestModel_MLP.pth')
+                print("model saved to" + str(model_save_path))
 
-            
-            print("model saved to" + str(model_save_path))
-
-    # with torch.no_grad():
-    #     model.eval()
-    # for step, (features, labels) in enumerate(test_dataloader):
+    with torch.no_grad():
+        model.eval()
+        ### so far, rule of thumb of this sampling timestamps is around 4000
+        timesteps_sample = 4000
+        samples = model(mode="generate", t=t, displacement_shape = 18, batch_size = 4, timesteps_sample = timesteps_sample)
+        torch.set_printoptions(precision = 4, sci_mode=False)
+        print("time = ", timesteps_sample, "result =" , samples[-1]*3.535067+4.4975667)
         
 
 if __name__ == "__main__":
