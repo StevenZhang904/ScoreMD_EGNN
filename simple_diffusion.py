@@ -14,7 +14,7 @@ from dataset.data_diffusion_demo import Diffusion_Dataset
 from Diffusion import DiffusionModel
 import time 
 import math
-from unet import Unet
+
 
 
 class SinusoidalPositionEmbeddings(nn.Module):
@@ -104,7 +104,7 @@ def train():
     # decoder = Decoder(zdim, hidden_dim, 18)
     train_losses, test_losses = [], []
 
-    timesteps = 3000
+    timesteps = 7000
     epoches = 10000
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -117,19 +117,20 @@ def train():
     #     channels=1,
     #     dim_mults=dim_mults
     # )
-    time_mlp_in_size = 8
+    time_mlp_in_size = 20
     denoise_model = Denoise_model(in_size = 18, out_size= 18, time_mlp_in_size = time_mlp_in_size).to(device)
-    denoise_model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/BestModel_MLP.pth"))
     lr = 0.00001
 
     optimizer = Adam(denoise_model.parameters(), lr=lr)
     noise_scale = 0.5
-    model = DiffusionModel(timesteps=timesteps, denoise_model = denoise_model, loss_type= "l2")
-    model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/BestModel_Diff.pth"))
+    model = DiffusionModel(timesteps=timesteps, denoise_model = denoise_model, loss_type= "l2").to(device)
+
+    # denoise_model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/BestModel_MLP.pth"))
+    # model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/BestModel_Diff.pth"))
 
     for i in tqdm(range(epoches)):
         losses = []
-        loss_temp = 0.0
+        loss_temp = math.inf
         for step, (features, labels) in enumerate(train_dataloader):
             features = features.to(device)
             batch_size = features.shape[0]
@@ -148,9 +149,10 @@ def train():
 
             print("In epoch ", i, ", loss is ", sum(losses)/len(losses))
             if loss_temp > sum(losses)/len(losses):
-                torch.save(model.state_dict(), model_save_path+'BestModel_Diff.pth')
-                torch.save(denoise_model.state_dict(), model_save_path+'BestModel_MLP.pth')
+                torch.save(model.state_dict(), model_save_path+'BestModel_Diff_emd_dim_16.pth')
+                torch.save(denoise_model.state_dict(), model_save_path+'BestModel_MLP_emd_dim_16.pth')
                 print("model saved to" + str(model_save_path))
+                loss_temp = sum(losses)/len(losses)
 
     with torch.no_grad():
         model.eval()

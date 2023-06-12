@@ -34,14 +34,15 @@ class Diffusion_Dataset(Dataset):
                 displacement = pos - positions[x-1]
                 displacements.append(displacement)    
 
-        mean, std, var = np.mean(positions), np.std(positions), np.var(positions)
+        positions = np.array(positions, dtype = np.float32)
+        mean, std, var = np.mean(positions, axis = 0), np.std(positions, axis = 0), np.var(positions, axis = 0)
         print(mean, std, var)
         positions = (positions - mean)/std
-        mean, std, var = np.mean(positions), np.std(positions), np.var(positions)
-        print(mean, std, var)            
+        # mean, std, var = np.mean(positions, axis = 0), np.std(positions, axis = 0), np.var(positions, axis = 0)
+        # print(mean, std, var)            
                 
         ## TODO: normalize displacements if needed
-        
+        print(type(positions[1]), type(positions))
         self.positions = np.array(positions, dtype = np.float32)
         self.labels = np.array(displacements, dtype = np.float32)
         self.len = len(self.labels)

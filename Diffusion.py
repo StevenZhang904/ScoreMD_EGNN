@@ -4,6 +4,7 @@ from torch import nn
 from tqdm import tqdm 
 import torch.nn.functional as F
 import math
+import numpy as np
 
 
 def extract(a, t, x_shape):
@@ -104,9 +105,13 @@ class DiffusionModel(nn.Module):
         device = next(self.denoise_model.parameters()).device
 
         b = shape[0] ### b = batch_size
-        # start from pure noise (for each example in the batch)
         print(shape)
+        # start from pure noise (for each example in the batch)
         displacement = torch.randn(shape, device=device)
+        # start from the mean of positions
+        # displacement = [[2.0273046, 1.9712732, 9.537093, 2.0279317, 1.9765526, 9.552533, 2.0245256, 1.9664096, 9.546699,
+        #                  2.027873, 1.9693326, 9.437345, 2.0301685, 1.9696349, 9.445996, 2.0288558, 1.9688513, 9.447838]  for x in range(b)]
+        # displacement = torch.tensor(displacement, device = device)
         displacements = []
 
         for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=self.timesteps):
