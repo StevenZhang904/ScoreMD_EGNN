@@ -10,8 +10,10 @@ from torch.optim import Adam, lr_scheduler
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 from tqdm import tqdm
-from ..dataset.data_diffusion_demo import Diffusion_Dataset
-from .Diffusion import DiffusionModel
+from data_diffusion_demo import Diff_EGNN_wrapper
+from Diffusion import DiffusionModel
+from EGNN import EGNN
+
 import time 
 import math
 
@@ -40,31 +42,31 @@ class SinusoidalPositionEmbeddings(nn.Module):
         return embeddings
 
 
-class Denoise_model(nn.Module):
-    def __init__(self, in_size, out_size = 18, time_mlp_in_size = 8):
-        super(Denoise_model, self).__init__()
-        self.time_mlp_in_size = time_mlp_in_size
-        self.in_size = in_size 
-        self.out_size = out_size
+# class Denoise_model(nn.Module):
+#     def __init__(self, in_size, out_size = 18, time_mlp_in_size = 8):
+#         super(Denoise_model, self).__init__()
+#         self.time_mlp_in_size = time_mlp_in_size
+#         self.in_size = in_size 
+#         self.out_size = out_size
 
-        self.time_mlp = nn.Sequential(
-            SinusoidalPositionEmbeddings(self.time_mlp_in_size),
-            nn.Linear(self.time_mlp_in_size, self.time_mlp_in_size*4),
-            nn.GELU(),
-            nn.Linear(self.time_mlp_in_size*4, self.time_mlp_in_size*4),
-        )
-        self.model = nn.Sequential(
-            nn.Linear(self.in_size, 512),
-            nn.ReLU(),
-            nn.Linear(512, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256)
-        )
-        self.output = nn.Linear(256+self.time_mlp_in_size*4, self.out_size)
+#         self.time_mlp = nn.Sequential(
+#             SinusoidalPositionEmbeddings(self.time_mlp_in_size),
+#             nn.Linear(self.time_mlp_in_size, self.time_mlp_in_size*4),
+#             nn.GELU(),
+#             nn.Linear(self.time_mlp_in_size*4, self.time_mlp_in_size*4),
+#         )
+#         self.model = nn.Sequential(
+#             nn.Linear(self.in_size, 512),
+#             nn.ReLU(),
+#             nn.Linear(512, 1024),
+#             nn.ReLU(),
+#             nn.Linear(1024, 2048),
+#             nn.ReLU(),
+#             nn.Linear(2048, 512),
+#             nn.ReLU(),
+#             nn.Linear(512, 256)
+#         )
+#         self.output = nn.Linear(256+self.time_mlp_in_size*4, self.out_size)
 
 
      
@@ -82,22 +84,30 @@ class Denoise_model(nn.Module):
 def train():
     # torch.cuda.empty_cache()
 
-    batch_size = 1120
+    batch_size = 256
 
 
-    Diffusion_Data = Diffusion_Dataset(
+    # Diffusion_Data = Diffusion_Dataset(
+    #     data_dir = "/home/cmu/Desktop/Summer_research/position_data_2.csv",
+    #     sys_dir = "/home/cmu/Desktop/Summer_research/sys_pdb/",
+    #     name = "circular_22_", 
+    
+    # )
+    # train_size = int(0.8 * len(Diffusion_Data))
+    # test_size = len(Diffusion_Data) - train_size
+    # train_dataset, test_dataset = torch.utils.data.random_split(Diffusion_Data, [train_size, test_size])
+    # train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=7)
+    # test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=7)
+    # print('training set size:', len(train_dataset))
+    # print('testing set size:', len(test_dataset))
+    Diffusion_Data = Diff_EGNN_wrapper(
+        batch_size = batch_size,
+        num_workers = 7,
         data_dir = "/home/cmu/Desktop/Summer_research/position_data_2.csv",
         sys_dir = "/home/cmu/Desktop/Summer_research/sys_pdb/",
-        name = "circular_22_",
+        name = "circular_22_", 
     )
-    train_size = int(0.8 * len(Diffusion_Data))
-    test_size = len(Diffusion_Data) - train_size
-    train_dataset, test_dataset = torch.utils.data.random_split(Diffusion_Data, [train_size, test_size])
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=7)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=7)
-    print('training set size:', len(train_dataset))
-    print('testing set size:', len(test_dataset))
-    
+    train_dataloader, test_dataloader = Diffusion_Data.get_data_loaders()
     # hidden_dim = 1024
     # zdim = 40
     # encoder = Encoder(18, hidden_dim, zdim)
@@ -118,8 +128,11 @@ def train():
     #     dim_mults=dim_mults
     # )
     time_mlp_in_size = 20
-    denoise_model = Denoise_model(in_size = 18, out_size= 18, time_mlp_in_size = time_mlp_in_size).to(device)
-    lr = 0.00001
+    # denoise_model = Denoise_model(in_size = 18, out_size= 18, time_mlp_in_size = time_mlp_in_size).to(device)
+    cutoff = 5
+    cutoff = (cutoff-4.4975667)/3.535067
+    denoise_model = EGNN(in_node_nf= 6, hidden_nf= 64, in_edge_nf= 0, hidden_channels = 64, cutoff = cutoff)
+    lr = 0.001
 
     optimizer = Adam(denoise_model.parameters(), lr=lr)
     noise_scale = 0.5
@@ -131,7 +144,7 @@ def train():
     for i in tqdm(range(epoches)):
         losses = []
         loss_temp = math.inf
-        for step, (features, labels) in enumerate(train_dataloader):
+        for step, features in enumerate(train_dataloader):
             features = features.to(device)
             batch_size = features.shape[0]
 
