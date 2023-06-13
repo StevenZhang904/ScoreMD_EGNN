@@ -10,8 +10,8 @@ from torch.optim import Adam, lr_scheduler
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 from tqdm import tqdm
-from dataset.data_diffusion_demo import Diffusion_Dataset
-from Diffusion import DiffusionModel
+from ..dataset.data_diffusion_demo import Diffusion_Dataset
+from .Diffusion import DiffusionModel
 import time 
 import math
 
