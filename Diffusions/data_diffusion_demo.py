@@ -120,7 +120,7 @@ class Diff_EGNN_wrapper(object):
 
         train_loader = PyGDataLoader( 
             train_valid_dataset, batch_size=self.batch_size, num_workers=self.num_workers, 
-            shuffle=False, drop_last=True, 
+            shuffle=True, drop_last=True, 
             pin_memory=True, persistent_workers=False
         )
         # valid_loader = PyGDataLoader(
@@ -130,7 +130,7 @@ class Diff_EGNN_wrapper(object):
         # )
         test_loader = PyGDataLoader(
             test_dataset, batch_size=self.batch_size, num_workers=self.num_workers, 
-            shuffle=False, drop_last=True, 
+            shuffle=True, drop_last=True, 
             pin_memory=True, persistent_workers=False
         )
         return train_loader, test_loader

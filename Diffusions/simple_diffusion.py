@@ -84,7 +84,7 @@ class SinusoidalPositionEmbeddings(nn.Module):
 def train():
     # torch.cuda.empty_cache()
 
-    batch_size = 256
+    batch_size = 1
 
 
     # Diffusion_Data = Diffusion_Dataset(
@@ -118,11 +118,11 @@ def train():
     
     # train_losses, test_losses = [], []
 
-    timesteps = 7000
-    epoches = 10000
+    timesteps = 3000
+    epoches = 3000
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model_save_path = "/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/Diffusions/"
+    model_save_path = "/home/cmu/Desktop/Summer_research/Diffusion/Diffusions/"
     # denoise_model = VAE(encoder, decoder).to(device)
 
 
@@ -133,34 +133,39 @@ def train():
     # )
     # time_mlp_in_size = 20
     # denoise_model = Denoise_model(in_size = 18, out_size= 18, time_mlp_in_size = time_mlp_in_size).to(device)
-    cutoff = 1 ### Normalized data ranging -1 to 1 
-    denoise_model = EGNN( hidden_nf= 64, in_edge_nf= 0, hidden_channels = 64, cutoff = cutoff)
-    lr = 0.0001
+    std = 3.535067 ### Initialized dataset would print out std
+    cutoff = 5/std*1.5 ### To adapt with normalized data ranging -1 to 1 
+    denoise_model = EGNN( in_edge_nf= 0, hidden_channels = 256, cutoff = cutoff).to(device)
+    lr = 0.00001
 
     optimizer = Adam(denoise_model.parameters(), lr=lr)
     model = DiffusionModel(timesteps=timesteps, denoise_model = denoise_model, loss_type= "l2").to(device)
 
     # denoise_model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/BestModel_MLP.pth"))
     # model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/BestModel_Diff.pth"))
-
+    indicator = 0
     for i in tqdm(range(epoches)):
         losses = []
         loss_temp = math.inf
         for Step, features in enumerate(train_dataloader):
             features = features.to(device)
             batch_size = int(len(features.batch)/6)
-            print(batch_size)
+            # print(batch_size)
             # Algorithm 1 line 3: sample t uniformally for every example in the batch
             t = torch.randint(0, timesteps, (batch_size,), device=device).long() # shape = [batch_size]
 
-            loss = model(mode="train", x_start=features, t=t)
+            if i == 1500:
+                indicator = 1
+            else:
+                indicator = 0
+            loss = model(mode="train", x_start=features, t=t, indicator = indicator)
             losses.append(loss)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-        if i % 100 == 0:
+        if i % 10 == 0:
 
             print("In epoch ", i, ", loss is ", sum(losses)/len(losses))
             if loss_temp > sum(losses)/len(losses):

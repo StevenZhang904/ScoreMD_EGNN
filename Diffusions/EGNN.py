@@ -3,7 +3,18 @@ from torch import nn
 import torch
 from torch_cluster import radius_graph
 from torch_scatter import scatter
-
+import numpy as np
+class GaussianFourierProjection(nn.Module):
+    """Gaussian random features for encoding time steps."""  
+    def __init__(self, embed_dim, scale=30.):
+        super().__init__()
+        # Randomly sample weights during initialization. These weights are fixed 
+        # during optimization and are not trainable.
+        self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
+    
+    def forward(self, x):
+        x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
 class E_GCL(nn.Module):
     """
@@ -110,9 +121,9 @@ class E_GCL(nn.Module):
 
 class EGNN(nn.Module):
     def __init__(self, 
-        hidden_channels, in_edge_nf=0, act_fn=nn.SiLU(), n_layers=4, 
+        hidden_channels, in_edge_nf=0, act_fn=nn.SiLU(), n_layers=2, 
         residual=True, attention=False, normalize=False, tanh=False, 
-        max_atom_type=2, cutoff=5.0, max_num_neighbors=6, **kwargs
+        max_atom_type=2, cutoff=0, max_num_neighbors=32, **kwargs
     ):
         '''
         :param max_atom_type: Number of features for 'h' at the input
@@ -140,6 +151,13 @@ class EGNN(nn.Module):
         self.max_num_neighbors = max_num_neighbors
         self.type_embedding = nn.Embedding(max_atom_type, hidden_channels)
 
+        self.t_emb = nn.Sequential(
+            GaussianFourierProjection(embed_dim=hidden_channels),
+            nn.Linear(hidden_channels, hidden_channels),
+            act_fn,
+            nn.Linear(hidden_channels, hidden_channels),
+        )
+
         for i in range(0, n_layers):
             self.add_module("gcl_%d" % i, E_GCL(
                 self.hidden_channels, self.hidden_channels, self.hidden_channels, edges_in_d=in_edge_nf,
@@ -151,8 +169,13 @@ class EGNN(nn.Module):
             nn.Linear(hidden_channels, 18)
         )
 
-    def forward(self, z, pos, batch, edge_index=None, edge_attr=None):
+    def forward(self, z, pos, batch, t,  edge_index=None, edge_attr=None):
+        temb = torch.squeeze(torch.stack((t, t, t, t, t, t), axis = 1).reshape(-1, 1))
+
         h = self.type_embedding(z)
+        temb = self.t_emb(temb)
+        # print(h.shape, temb.shape)
+        h += temb
         x = deepcopy(pos)
         if edge_index is None:
             edge_index = radius_graph(
@@ -162,11 +185,14 @@ class EGNN(nn.Module):
                 loop=False,
                 max_num_neighbors=self.max_num_neighbors + 1,
             )
+        print(edge_index.shape)
         for i in range(0, self.n_layers):
             h, x, _ = self._modules["gcl_%d" % i](h, edge_index, x, edge_attr=edge_attr)
+            # h += temb
         out = scatter(h, batch, dim=0, reduce='add')
         out = self.position_head(out)
-        return out, x - pos
+        displacement = x - pos
+        return out
 
 
 def unsorted_segment_sum(data, segment_ids, num_segments):

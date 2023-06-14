@@ -56,14 +56,15 @@ class DiffusionModel(nn.Module):
         sqrt_one_minus_alphas_cumprod_t = extract(
             self.sqrt_one_minus_alphas_cumprod, t, x_start.pos.shape
         )
-        print("sjadijsd", sqrt_alphas_cumprod_t.shape, x_start.pos.shape, sqrt_one_minus_alphas_cumprod_t.shape, noise.shape)
+        # print("sjadijsd", sqrt_alphas_cumprod_t.shape, x_start.pos.shape, sqrt_one_minus_alphas_cumprod_t.shape, noise.shape)
+
         ### multiplied by 6 to comply with the initialization of t in the simple diffusion.py
         ### both sqrt_one_minus_alphas_cumprod_t and sqrt_alphas_cumprod_t are in shape (batchsize, 1)
         sqrt_one_minus_alphas_cumprod_t_6 = torch.cat((sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t), axis = 1).reshape(len(sqrt_one_minus_alphas_cumprod_t)*6, 1)
         sqrt_alphas_cumprod_t_6 = torch.cat((sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t), axis = 1).reshape(len(sqrt_alphas_cumprod_t)*6, 1)
         return sqrt_alphas_cumprod_t_6 * x_start.pos + sqrt_one_minus_alphas_cumprod_t_6 * noise
 
-    def compute_loss(self, x_start, t, loss_type="l2"):
+    def compute_loss(self, x_start, t, loss_type="l2", indicator = 0):
         # print("noise =", noise)
         # print("noise.shape = ", noise.shape)
 
@@ -73,8 +74,13 @@ class DiffusionModel(nn.Module):
         # print("x_start.pos, x_noisy.pos=", x_start.pos, x_noisy.pos)
         # x_noisy shape = (batch_size , 18)
         # print("x_noisy= ", x_noisy, "its shape = ", x_noisy.shape)
-        predicted_noise = self.denoise_model(x_noisy, t)
-        print("predicted_noise = ,", predicted_noise, "its shape = ", predicted_noise.shape)
+        predicted_noise = self.denoise_model(x_noisy.x, x_noisy.pos, x_noisy.batch, t).reshape(noise.shape)
+
+        if indicator == 1:
+                
+            print()
+            print("noise shape = ,", noise)
+            print("predicted_noise shape = ", predicted_noise)
         if loss_type == 'l1':
             loss = F.l1_loss(noise, predicted_noise)
         elif loss_type == 'l2':
@@ -111,7 +117,7 @@ class DiffusionModel(nn.Module):
         device = next(self.denoise_model.parameters()).device
 
         b = shape[0] ### b = batch_size
-        print(shape)
+        # print(shape)
         # start from pure noise (for each example in the batch)
         displacement = torch.randn(shape, device=device)
         # start from the mean of positions
@@ -129,9 +135,9 @@ class DiffusionModel(nn.Module):
     def sample(self, displacement_shape, timesteps, batch_size=16):
         return self.p_sample_loop(shape=(batch_size, displacement_shape), timesteps= timesteps)
 
-    def forward(self, mode, t = None, x_start = None, displacement_shape = None, batch_size = 256, timesteps_sample = 1000):
+    def forward(self, mode, t = None, x_start = None, displacement_shape = None, batch_size = 256, timesteps_sample = 1000, indicator = 0):
         if mode == "train":
-            return self.compute_loss(x_start, t, self.loss_type)
+            return self.compute_loss(x_start, t, self.loss_type, indicator=indicator)
         elif mode == "generate":
             print("generating")
             return self.sample(displacement_shape=displacement_shape, batch_size=batch_size, timesteps= timesteps_sample)
