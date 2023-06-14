@@ -5,6 +5,7 @@ from tqdm import tqdm
 import torch.nn.functional as F
 import math
 import numpy as np
+from copy import deepcopy
 
 
 def extract(a, t, x_shape):
@@ -17,7 +18,7 @@ def extract(a, t, x_shape):
     :param x_shape:
     :return:
     """
-    batch_size = t.shape[0]
+    batch_size = t.shape[0] 
     out = a.gather(-1, t.cpu())
     return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
 
@@ -49,26 +50,31 @@ class DiffusionModel(nn.Module):
         # forwarddiffusion  
         # x_t  = sqrt(alphas_cumprod)*x_0 + sqrt(1 - alphas_cumprod)*z_t
         if noise is None:
-            noise = torch.randn_like(x_start)
+            noise = torch.randn_like(x_start.pos)
 
-        sqrt_alphas_cumprod_t = extract(self.sqrt_alphas_cumprod, t, x_start.shape)
+        sqrt_alphas_cumprod_t = extract(self.sqrt_alphas_cumprod, t, x_start.pos.shape)
         sqrt_one_minus_alphas_cumprod_t = extract(
-            self.sqrt_one_minus_alphas_cumprod, t, x_start.shape
+            self.sqrt_one_minus_alphas_cumprod, t, x_start.pos.shape
         )
+        print("sjadijsd", sqrt_alphas_cumprod_t.shape, x_start.pos.shape, sqrt_one_minus_alphas_cumprod_t.shape, noise.shape)
+        ### multiplied by 6 to comply with the initialization of t in the simple diffusion.py
+        ### both sqrt_one_minus_alphas_cumprod_t and sqrt_alphas_cumprod_t are in shape (batchsize, 1)
+        sqrt_one_minus_alphas_cumprod_t_6 = torch.cat((sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t), axis = 1).reshape(len(sqrt_one_minus_alphas_cumprod_t)*6, 1)
+        sqrt_alphas_cumprod_t_6 = torch.cat((sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t), axis = 1).reshape(len(sqrt_alphas_cumprod_t)*6, 1)
+        return sqrt_alphas_cumprod_t_6 * x_start.pos + sqrt_one_minus_alphas_cumprod_t_6 * noise
 
-        return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
-
-    def compute_loss(self, x_start, t, noise=None, loss_type="l2"):
+    def compute_loss(self, x_start, t, loss_type="l2"):
         # print("noise =", noise)
         # print("noise.shape = ", noise.shape)
-        if noise is None:
-            noise = torch.randn_like(x_start)
 
-        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise).to(x_start.device)
+        noise = torch.randn_like(x_start.pos)
+        x_noisy = deepcopy(x_start)
+        x_noisy.pos = self.q_sample(x_start=x_start, t=t, noise=noise).to(x_start.pos.device)
+        # print("x_start.pos, x_noisy.pos=", x_start.pos, x_noisy.pos)
         # x_noisy shape = (batch_size , 18)
         # print("x_noisy= ", x_noisy, "its shape = ", x_noisy.shape)
         predicted_noise = self.denoise_model(x_noisy, t)
-        # print("predicted_noise = ,", predicted_noise, "its shape = ", predicted_noise.shape)
+        print("predicted_noise = ,", predicted_noise, "its shape = ", predicted_noise.shape)
         if loss_type == 'l1':
             loss = F.l1_loss(noise, predicted_noise)
         elif loss_type == 'l2':
@@ -123,10 +129,9 @@ class DiffusionModel(nn.Module):
     def sample(self, displacement_shape, timesteps, batch_size=16):
         return self.p_sample_loop(shape=(batch_size, displacement_shape), timesteps= timesteps)
 
-    def forward(self, mode, t = None, x_start = None, displacement_shape = None, batch_size = 256, noise_scale = 0.5, timesteps_sample = 1000):
+    def forward(self, mode, t = None, x_start = None, displacement_shape = None, batch_size = 256, timesteps_sample = 1000):
         if mode == "train":
-            noise = torch.randn_like(x_start) * noise_scale
-            return self.compute_loss(x_start, t, noise, self.loss_type)
+            return self.compute_loss(x_start, t, self.loss_type)
         elif mode == "generate":
             print("generating")
             return self.sample(displacement_shape=displacement_shape, batch_size=batch_size, timesteps= timesteps_sample)

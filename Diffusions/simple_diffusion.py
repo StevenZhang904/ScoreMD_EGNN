@@ -10,7 +10,7 @@ from torch.optim import Adam, lr_scheduler
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 from tqdm import tqdm
-from data_diffusion_demo import Diff_EGNN_wrapper
+from data_diffusion_demo import Diff_EGNN_wrapper, Diffusion_Dataset
 from Diffusion import DiffusionModel
 from EGNN import EGNN
 
@@ -70,12 +70,12 @@ class SinusoidalPositionEmbeddings(nn.Module):
 
 
      
-    def forward(self, x, t ):
-        time = self.time_mlp(t)
-        res = self.model(x)
-        x = torch.cat((res, time), -1)
-        res = self.output(x)
-        return res
+    # def forward(self, x, t ):
+    #     time = self.time_mlp(t)
+    #     res = self.model(x)
+    #     x = torch.cat((res, time), -1)
+    #     res = self.output(x)
+    #     return res
 
     # def forward(self, x):
     #     out = self.model(x)
@@ -93,13 +93,14 @@ def train():
     #     name = "circular_22_", 
     
     # )
-    # train_size = int(0.8 * len(Diffusion_Data))
+    # train_size = int(0.9 * len(Diffusion_Data))
     # test_size = len(Diffusion_Data) - train_size
     # train_dataset, test_dataset = torch.utils.data.random_split(Diffusion_Data, [train_size, test_size])
     # train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=7)
     # test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=7)
     # print('training set size:', len(train_dataset))
     # print('testing set size:', len(test_dataset))
+
     Diffusion_Data = Diff_EGNN_wrapper(
         batch_size = batch_size,
         num_workers = 7,
@@ -108,17 +109,20 @@ def train():
         name = "circular_22_", 
     )
     train_dataloader, test_dataloader = Diffusion_Data.get_data_loaders()
+
+
     # hidden_dim = 1024
     # zdim = 40
     # encoder = Encoder(18, hidden_dim, zdim)
     # decoder = Decoder(zdim, hidden_dim, 18)
-    train_losses, test_losses = [], []
+    
+    # train_losses, test_losses = [], []
 
     timesteps = 7000
     epoches = 10000
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    model_save_path = "/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/"
+    model_save_path = "/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/Diffusions/"
     # denoise_model = VAE(encoder, decoder).to(device)
 
 
@@ -127,15 +131,13 @@ def train():
     #     channels=1,
     #     dim_mults=dim_mults
     # )
-    time_mlp_in_size = 20
+    # time_mlp_in_size = 20
     # denoise_model = Denoise_model(in_size = 18, out_size= 18, time_mlp_in_size = time_mlp_in_size).to(device)
-    cutoff = 5
-    cutoff = (cutoff-4.4975667)/3.535067
-    denoise_model = EGNN(in_node_nf= 6, hidden_nf= 64, in_edge_nf= 0, hidden_channels = 64, cutoff = cutoff)
-    lr = 0.001
+    cutoff = 1 ### Normalized data ranging -1 to 1 
+    denoise_model = EGNN( hidden_nf= 64, in_edge_nf= 0, hidden_channels = 64, cutoff = cutoff)
+    lr = 0.0001
 
     optimizer = Adam(denoise_model.parameters(), lr=lr)
-    noise_scale = 0.5
     model = DiffusionModel(timesteps=timesteps, denoise_model = denoise_model, loss_type= "l2").to(device)
 
     # denoise_model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/BestModel_MLP.pth"))
@@ -144,14 +146,14 @@ def train():
     for i in tqdm(range(epoches)):
         losses = []
         loss_temp = math.inf
-        for step, features in enumerate(train_dataloader):
+        for Step, features in enumerate(train_dataloader):
             features = features.to(device)
-            batch_size = features.shape[0]
-
+            batch_size = int(len(features.batch)/6)
+            print(batch_size)
             # Algorithm 1 line 3: sample t uniformally for every example in the batch
             t = torch.randint(0, timesteps, (batch_size,), device=device).long() # shape = [batch_size]
 
-            loss = model(mode="train", x_start=features, t=t, noise_scale = noise_scale)
+            loss = model(mode="train", x_start=features, t=t)
             losses.append(loss)
 
             optimizer.zero_grad()
@@ -162,8 +164,8 @@ def train():
 
             print("In epoch ", i, ", loss is ", sum(losses)/len(losses))
             if loss_temp > sum(losses)/len(losses):
-                torch.save(model.state_dict(), model_save_path+'BestModel_Diff_emd_dim_16.pth')
-                torch.save(denoise_model.state_dict(), model_save_path+'BestModel_MLP_emd_dim_16.pth')
+                torch.save(model.state_dict(), model_save_path+'BestModel_Diff_EGNN.pth')
+                torch.save(denoise_model.state_dict(), model_save_path+'BestModel_EGNN.pth')
                 print("model saved to" + str(model_save_path))
                 loss_temp = sum(losses)/len(losses)
 
@@ -171,8 +173,8 @@ def train():
         model.eval()
         ### so far, rule of thumb of this sampling timestamps is around 4000
         timesteps_sample = 4000
-        samples = model(mode="generate", t=t, displacement_shape = 18, batch_size = 4, timesteps_sample = timesteps_sample)
-        torch.set_printoptions(precision = 4, sci_mode=False)
+        samples = model(mode="generate", t=t, displacement_shape = (6,3), batch_size = 4, timesteps_sample = timesteps_sample)
+        torch.set_printoptions(precision = 7, sci_mode=False)
         print("time = ", timesteps_sample, "result =" , samples[-1]*3.535067+4.4975667)
         
 

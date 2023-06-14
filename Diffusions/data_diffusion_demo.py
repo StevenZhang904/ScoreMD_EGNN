@@ -74,9 +74,12 @@ class Diff_EGNN_Dataset(Dataset):
                 displacements.append(displacement)    
 
         positions = np.array(positions, dtype = np.float32)
-        mean, std, var = np.mean(positions, axis = 0), np.std(positions, axis = 0), np.var(positions, axis = 0)
-        print(mean, std, var)
-        positions = (positions - mean)/std
+
+        mean, std = positions.mean(), positions.std()
+        print(mean, std)
+        positions = (positions - mean)/std  ### Normalize to (0, 1) range
+        positions = positions*2 - 1 ### Normalize to (-1,1) range as noted in the DDPM paper
+
         self.positions = np.array(positions, dtype = np.float32)
         self.len = len(self.positions)
         ### Hard code atom types: where 0 is oxygen and 1 is hydrogen
@@ -117,7 +120,7 @@ class Diff_EGNN_wrapper(object):
 
         train_loader = PyGDataLoader( 
             train_valid_dataset, batch_size=self.batch_size, num_workers=self.num_workers, 
-            shuffle=True, drop_last=True, 
+            shuffle=False, drop_last=True, 
             pin_memory=True, persistent_workers=False
         )
         # valid_loader = PyGDataLoader(
@@ -127,22 +130,36 @@ class Diff_EGNN_wrapper(object):
         # )
         test_loader = PyGDataLoader(
             test_dataset, batch_size=self.batch_size, num_workers=self.num_workers, 
-            shuffle=True, drop_last=True, 
+            shuffle=False, drop_last=True, 
             pin_memory=True, persistent_workers=False
         )
         return train_loader, test_loader
 
-Diffusion_Data = Diffusion_Dataset(
+# Diffusion_Data = Diffusion_Dataset(
+#     data_dir = "/home/cmu/Desktop/Summer_research/position_data_2.csv",
+#     sys_dir = "/home/cmu/Desktop/Summer_research/sys_pdb/",
+#     name = "circular_22_",
+# )
+# train_size = int(0.8 * len(Diffusion_Data))
+# test_size = len(Diffusion_Data) - train_size
+# train_dataset, test_dataset = torch.utils.data.random_split(Diffusion_Data, [train_size, test_size])
+# train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4)
+# e = 0
+# print(len(train_dataloader))
+# print(len(next(enumerate(train_dataloader))[1][1]))
+
+
+
+batch_size = 4
+Diffusion_Data = Diff_EGNN_wrapper(
+    batch_size = batch_size,
+    num_workers = 7,
     data_dir = "/home/cmu/Desktop/Summer_research/position_data_2.csv",
     sys_dir = "/home/cmu/Desktop/Summer_research/sys_pdb/",
-    name = "circular_22_",
+    name = "circular_22_", 
 )
-
-train_size = int(0.8 * len(Diffusion_Data))
-test_size = len(Diffusion_Data) - train_size
-train_dataset, test_dataset = torch.utils.data.random_split(Diffusion_Data, [train_size, test_size])
-
-train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4)
-e = 0
+train_dataloader, test_dataloader = Diffusion_Data.get_data_loaders()
 print(len(train_dataloader))
-print(len(next(enumerate(train_dataloader))[1][1]))
+print(next(enumerate(train_dataloader)))
+print(next(enumerate(train_dataloader))[1].ptr)
+print(len(next(enumerate(train_dataloader))[1].batch))
