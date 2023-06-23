@@ -10,7 +10,7 @@ class GaussianFourierProjection(nn.Module):
         super().__init__()
         # Randomly sample weights during initialization. These weights are fixed 
         # during optimization and are not trainable.
-        self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
+        self.W = nn.Parameter(torch.randn(embed_dim//2) * scale, requires_grad=False)
     
     def forward(self, x):
         x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
@@ -64,6 +64,7 @@ class E_GCL(nn.Module):
 
     def edge_model(self, source, target, radial, edge_attr):
         if edge_attr is None:  # Unused.
+            # print(source.shape, "source.shape", target.shape, "target.shape", radial.shape, "radial.shape")
             out = torch.cat([source, target, radial], dim=1)
         else:
             out = torch.cat([source, target, radial, edge_attr], dim=1)
@@ -79,6 +80,7 @@ class E_GCL(nn.Module):
         if node_attr is not None:
             agg = torch.cat([x, agg, node_attr], dim=1)
         else:
+            # print(x.shape, "x.shape", agg.shape, "agg.shape")
             agg = torch.cat([x, agg], dim=1)
         out = self.node_mlp(agg)
         if self.residual:
@@ -111,8 +113,8 @@ class E_GCL(nn.Module):
     def forward(self, h, edge_index, coord, edge_attr=None, node_attr=None):
         row, col = edge_index
         radial, coord_diff = self.coord2radial(edge_index, coord)
-
-        edge_feat = self.edge_model(h[row], h[col], radial, edge_attr)
+        
+        edge_feat = self.edge_model(h[row],h[col], radial, edge_attr)
         coord = self.coord_model(coord, edge_index, coord_diff, edge_feat)
         h, agg = self.node_model(h, edge_index, edge_feat, node_attr)
 
@@ -121,7 +123,7 @@ class E_GCL(nn.Module):
 
 class EGNN(nn.Module):
     def __init__(self, 
-        hidden_channels, in_edge_nf=0, act_fn=nn.SiLU(), n_layers=2, 
+        hidden_channels, in_edge_nf=0, act_fn=nn.SiLU(), n_layers=3, 
         residual=True, attention=False, normalize=False, tanh=False, 
         max_atom_type=2, cutoff=0, max_num_neighbors=32, **kwargs
     ):
@@ -158,25 +160,35 @@ class EGNN(nn.Module):
             nn.Linear(hidden_channels, hidden_channels),
         )
 
+        # Gaussian = GaussianFourierProjection(self.hidden_channels)
+        # self.act_fn = act_fn
+        # linear = nn.Linear(hidden_channels, hidden_channels)
+
         for i in range(0, n_layers):
             self.add_module("gcl_%d" % i, E_GCL(
                 self.hidden_channels, self.hidden_channels, self.hidden_channels, edges_in_d=in_edge_nf,
                 act_fn=act_fn, residual=residual, attention=attention, normalize=normalize, tanh=tanh))
         
         self.position_head = nn.Sequential(
-            nn.Linear(hidden_channels, hidden_channels),
+            nn.Linear(hidden_channels, hidden_channels*2),
             nn.SiLU(), 
+            nn.Linear(hidden_channels*2, hidden_channels),
+            nn.SiLU(),
             nn.Linear(hidden_channels, 18)
         )
 
-    def forward(self, z, pos, batch, t,  edge_index=None, edge_attr=None):
-        temb = torch.squeeze(torch.stack((t, t, t, t, t, t), axis = 1).reshape(-1, 1))
+    def forward(self, z, pos, disp, batch, t,  edge_index=None, edge_attr=None):
+
 
         h = self.type_embedding(z)
+        # print(h.shape)
+
+        temb = torch.stack((t, t, t, t, t, t), axis = 1).reshape(-1, 1)
         temb = self.t_emb(temb)
-        # print(h.shape, temb.shape)
+
         h += temb
-        x = deepcopy(pos)
+        h = torch.squeeze(h)
+        x = deepcopy(disp)
         if edge_index is None:
             edge_index = radius_graph(
                 pos,
@@ -185,14 +197,19 @@ class EGNN(nn.Module):
                 loop=False,
                 max_num_neighbors=self.max_num_neighbors + 1,
             )
-        print(edge_index.shape)
+        # print(edge_index.shape, "edge_index.shape")
         for i in range(0, self.n_layers):
-            h, x, _ = self._modules["gcl_%d" % i](h, edge_index, x, edge_attr=edge_attr)
+            h, x, _ = self._modules["gcl_%d" % i](h, edge_index, x, edge_attr = edge_attr)
             # h += temb
-        out = scatter(h, batch, dim=0, reduce='add')
-        out = self.position_head(out)
-        displacement = x - pos
-        return out
+            # h = torch.squeeze(h)
+
+        # out = scatter(h, batch, dim=0, reduce='sum')
+        # # print(out.shape, "out.shape")
+        # out = self.position_head(out)
+        noise = x - disp
+        # print(out.shape, "out.shape")
+        return noise 
+
 
 
 def unsorted_segment_sum(data, segment_ids, num_segments):

@@ -6,7 +6,11 @@ import torch.nn.functional as F
 import math
 import numpy as np
 from copy import deepcopy
+from torch_geometric.data import Data
 
+def stack(x):
+    x = torch.cat((x, x, x, x, x, x), axis = 1).reshape(len(x)*6, 1)
+    return x
 
 def extract(a, t, x_shape):
     """
@@ -22,6 +26,10 @@ def extract(a, t, x_shape):
     out = a.gather(-1, t.cpu())
     return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
 
+def remove_mean(x):
+    mean = torch.mean(x, dim=1, keepdim=True)
+    x = x - mean
+    return x
 
 class DiffusionModel(nn.Module):
     def __init__(self,timesteps=1000,denoise_model=None, loss_type = "l2"):
@@ -50,37 +58,37 @@ class DiffusionModel(nn.Module):
         # forwarddiffusion  
         # x_t  = sqrt(alphas_cumprod)*x_0 + sqrt(1 - alphas_cumprod)*z_t
         if noise is None:
-            noise = torch.randn_like(x_start.pos)
+            noise = torch.randn_like(x_start.disp)
+        # noise = remove_mean(noise)
+        # print(noise.shape, "noise.shape = , which should be (batchsize,6, 3)")
 
-        sqrt_alphas_cumprod_t = extract(self.sqrt_alphas_cumprod, t, x_start.pos.shape)
+        sqrt_alphas_cumprod_t = extract(self.sqrt_alphas_cumprod, t, x_start.disp.shape)
         sqrt_one_minus_alphas_cumprod_t = extract(
-            self.sqrt_one_minus_alphas_cumprod, t, x_start.pos.shape
+            self.sqrt_one_minus_alphas_cumprod, t, x_start.disp.shape
         )
-        # print("sjadijsd", sqrt_alphas_cumprod_t.shape, x_start.pos.shape, sqrt_one_minus_alphas_cumprod_t.shape, noise.shape)
 
-        ### multiplied by 6 to comply with the initialization of t in the simple diffusion.py
+        ### multiplied by 6 to comply with the initialization of t in the simple diffusion.py, which is in shape (batchsize,1)
         ### both sqrt_one_minus_alphas_cumprod_t and sqrt_alphas_cumprod_t are in shape (batchsize, 1)
         sqrt_one_minus_alphas_cumprod_t_6 = torch.cat((sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t, sqrt_one_minus_alphas_cumprod_t), axis = 1).reshape(len(sqrt_one_minus_alphas_cumprod_t)*6, 1)
         sqrt_alphas_cumprod_t_6 = torch.cat((sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t, sqrt_alphas_cumprod_t), axis = 1).reshape(len(sqrt_alphas_cumprod_t)*6, 1)
-        return sqrt_alphas_cumprod_t_6 * x_start.pos + sqrt_one_minus_alphas_cumprod_t_6 * noise
+        return sqrt_alphas_cumprod_t_6 * x_start.disp + sqrt_one_minus_alphas_cumprod_t_6 * noise
 
-    def compute_loss(self, x_start, t, loss_type="l2", indicator = 0):
+    def compute_loss(self, x_start, t, loss_type="l2"):
         # print("noise =", noise)
         # print("noise.shape = ", noise.shape)
 
-        noise = torch.randn_like(x_start.pos)
+        noise = torch.randn_like(x_start.disp)
         x_noisy = deepcopy(x_start)
-        x_noisy.pos = self.q_sample(x_start=x_start, t=t, noise=noise).to(x_start.pos.device)
+        x_noisy.disp = self.q_sample(x_start=x_start, t=t, noise=noise).to(x_start.pos.device)
+        # print(x_noisy.pos, "x_noisy", x_noisy.pos.shape, "x_noisy.pos.shape")
+        # print(x_start.pos, "x_start", x_start.pos.shape, "x_start.pos.shape")
+
         # print("x_start.pos, x_noisy.pos=", x_start.pos, x_noisy.pos)
         # x_noisy shape = (batch_size , 18)
         # print("x_noisy= ", x_noisy, "its shape = ", x_noisy.shape)
-        predicted_noise = self.denoise_model(x_noisy.x, x_noisy.pos, x_noisy.batch, t).reshape(noise.shape)
+        predicted_noise = self.denoise_model(x_noisy.x, x_noisy.pos, x_noisy.disp, x_noisy.batch, t).reshape(noise.shape)
 
-        if indicator == 1:
-                
-            print()
-            print("noise shape = ,", noise)
-            print("predicted_noise shape = ", predicted_noise)
+
         if loss_type == 'l1':
             loss = F.l1_loss(noise, predicted_noise)
         elif loss_type == 'l2':
@@ -92,55 +100,69 @@ class DiffusionModel(nn.Module):
         return loss
 
     @torch.no_grad()
-    def p_sample(self, x, t, t_index):
-        betas_t = extract(self.betas, t, x.shape)
+    def p_sample(self, x_start,  t, t_index):
+        betas_t = extract(self.betas, t, x_start.disp.shape)
         sqrt_one_minus_alphas_cumprod_t = extract(
-            self.sqrt_one_minus_alphas_cumprod, t, x.shape
+            self.sqrt_one_minus_alphas_cumprod, t, x_start.disp.shape
         )
-        sqrt_recip_alphas_t = extract(self.sqrt_recip_alphas, t, x.shape)
+        sqrt_recip_alphas_t = extract(self.sqrt_recip_alphas, t, x_start.disp.shape)
 
         # Equation 11 in the paper
+
+        betas_t = stack(betas_t)
+        sqrt_one_minus_alphas_cumprod_t = stack(sqrt_one_minus_alphas_cumprod_t)
+        sqrt_recip_alphas_t = stack(sqrt_recip_alphas_t)
+
         model_mean = sqrt_recip_alphas_t * (
-                x - betas_t * self.denoise_model(x, t) / sqrt_one_minus_alphas_cumprod_t
+                x_start.disp - betas_t * self.denoise_model(x_start.x, x_start.pos, x_start.disp, x_start.batch, t) / sqrt_one_minus_alphas_cumprod_t
         )
 
         if t_index == 0:
             return model_mean
         else:
-            posterior_variance_t = extract(self.posterior_variance, t, x.shape)
-            noise = torch.randn_like(x)
+            posterior_variance_t = extract(self.posterior_variance, t, x_start.disp.shape)
+            posterior_variance_t = stack(posterior_variance_t)
+            noise = torch.randn_like(x_start.disp)
             # Algorithm 2 line 4:
             return model_mean + torch.sqrt(posterior_variance_t) * noise
 
     @torch.no_grad()
-    def p_sample_loop(self, shape, timesteps):
-        device = next(self.denoise_model.parameters()).device
+    def p_sample_loop(self, batch_size, timesteps, x_start):
 
-        b = shape[0] ### b = batch_size
-        # print(shape)
+        device = next(self.denoise_model.parameters()).device
+        b = batch_size ### b = batch_size
+        noise = torch.randn_like(x_start.disp)
+        # noise = remove_mean(noise)
+        x_noisy = deepcopy(x_start)
+        x_noisy.disp = noise
         # start from pure noise (for each example in the batch)
-        displacement = torch.randn(shape, device=device)
-        # start from the mean of positions
-        # displacement = [[2.0273046, 1.9712732, 9.537093, 2.0279317, 1.9765526, 9.552533, 2.0245256, 1.9664096, 9.546699,
-        #                  2.027873, 1.9693326, 9.437345, 2.0301685, 1.9696349, 9.445996, 2.0288558, 1.9688513, 9.447838]  for x in range(b)]
+        # displacement = torch.randn(shape, device=device)
+        # x = [[0, 1, 1, 0, 1, 1] for i in range(b)]
+        # x = torch.tensor(x, dtype=torch.long).reshape(-1,1)
+
+        # positions = [[[-0.7922947, -0.8245714, 0.97153705], [-0.7923394, -0.8219834, 0.9733558], [-0.79429007, -0.82785374, 0.9726529],
+        #              [-0.7919676, -0.8256582,  0.9595635], [-0.7910668, -0.82592213, 0.9605768], [-0.7918274, -0.82641715, 0.9607975]] for i in range(b)]
+        # positions = np.array(positions).reshape(b*6,3)
+        # displacements = [[-0.01533398, -0.01513585, -0.01517341, -0.01536195, -0.01505184, -0.01518048, -0.01517109, -0.01535689, -0.01516895,
+        #                  -0.01535876, -0.0150763,  -0.01517719, -0.01533241, -0.01511102, -0.01517764, -0.0154219,  -0.01525282, -0.01516971] for i in range(b)]
         # displacement = torch.tensor(displacement, device = device)
         displacements = []
 
         for i in tqdm(reversed(range(0, timesteps)), desc='sampling loop time step', total=self.timesteps):
-            displacement = self.p_sample(displacement, torch.full((b,), i, device=device, dtype=torch.long), i)
+            displacement = self.p_sample(x_start, torch.full((b,), i, device=device, dtype=torch.long), i)
             displacements.append(displacement.cpu().numpy())
         return displacements
 
     @torch.no_grad()
-    def sample(self, displacement_shape, timesteps, batch_size=16):
-        return self.p_sample_loop(shape=(batch_size, displacement_shape), timesteps= timesteps)
+    def sample(self, timesteps, batch_size, x_start =  None):
+        return self.p_sample_loop(batch_size, timesteps= timesteps, x_start = x_start)
 
-    def forward(self, mode, t = None, x_start = None, displacement_shape = None, batch_size = 256, timesteps_sample = 1000, indicator = 0):
+    def forward(self, mode, t = None, x_start = None, batch_size = 256, timesteps_sample = 1000):
         if mode == "train":
-            return self.compute_loss(x_start, t, self.loss_type, indicator=indicator)
+            return self.compute_loss(x_start, t, self.loss_type)
         elif mode == "generate":
             print("generating")
-            return self.sample(displacement_shape=displacement_shape, batch_size=batch_size, timesteps= timesteps_sample)
+            return self.sample(batch_size=batch_size, timesteps= timesteps_sample, x_start = x_start)
         else:
             raise NotImplementedError
 

@@ -13,11 +13,20 @@ from tqdm import tqdm
 from data_diffusion_demo import Diff_EGNN_wrapper, Diffusion_Dataset
 from Diffusion import DiffusionModel
 from EGNN import EGNN
+from copy import deepcopy
 
 import time 
 import math
 
-
+def scale_back(result):
+    min = 0.5240774
+    max = 2.280084
+    result += 1 
+    result /= 2
+    result *= (max - min)
+    result += min
+    result = np.exp(result)
+    return result
 
 class SinusoidalPositionEmbeddings(nn.Module):
     '''
@@ -84,7 +93,7 @@ class SinusoidalPositionEmbeddings(nn.Module):
 def train():
     # torch.cuda.empty_cache()
 
-    batch_size = 1
+    batch_size = 32
 
 
     # Diffusion_Data = Diffusion_Dataset(
@@ -118,10 +127,11 @@ def train():
     
     # train_losses, test_losses = [], []
 
-    timesteps = 3000
-    epoches = 3000
+    timesteps = 500
+    epoches = 5000
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # device = "cpu"
     model_save_path = "/home/cmu/Desktop/Summer_research/Diffusion/Diffusions/"
     # denoise_model = VAE(encoder, decoder).to(device)
 
@@ -133,20 +143,22 @@ def train():
     # )
     # time_mlp_in_size = 20
     # denoise_model = Denoise_model(in_size = 18, out_size= 18, time_mlp_in_size = time_mlp_in_size).to(device)
-    std = 3.535067 ### Initialized dataset would print out std
-    cutoff = 5/std*1.5 ### To adapt with normalized data ranging -1 to 1 
+    cutoff = 5 ### To adapt with normalized data ranging -1 to 1 
+    cutoff = (math.log(cutoff) - 0.5240774) / (2.280084 - 0.5240774)
+    cutoff = cutoff*2 - 1
+    print("cutoff = ", cutoff)
     denoise_model = EGNN( in_edge_nf= 0, hidden_channels = 256, cutoff = cutoff).to(device)
     lr = 0.00001
-
     optimizer = Adam(denoise_model.parameters(), lr=lr)
     model = DiffusionModel(timesteps=timesteps, denoise_model = denoise_model, loss_type= "l2").to(device)
 
-    # denoise_model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/BestModel_MLP.pth"))
-    # model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/ScoreMD_EGNN/BestModel_Diff.pth"))
-    indicator = 0
+    # denoise_model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/Diffusion/Diffusions/BestModel_EGNN.pth"))
+    # model.load_state_dict(torch.load("/home/cmu/Desktop/Summer_research/Diffusion/Diffusions/BestModel_Diff_EGNN.pth"))
+    loss_temp = math.inf
     for i in tqdm(range(epoches)):
+        model.train()
         losses = []
-        loss_temp = math.inf
+  
         for Step, features in enumerate(train_dataloader):
             features = features.to(device)
             batch_size = int(len(features.batch)/6)
@@ -154,11 +166,7 @@ def train():
             # Algorithm 1 line 3: sample t uniformally for every example in the batch
             t = torch.randint(0, timesteps, (batch_size,), device=device).long() # shape = [batch_size]
 
-            if i == 1500:
-                indicator = 1
-            else:
-                indicator = 0
-            loss = model(mode="train", x_start=features, t=t, indicator = indicator)
+            loss = model(mode="train", x_start=features, t=t)
             losses.append(loss)
 
             optimizer.zero_grad()
@@ -176,12 +184,19 @@ def train():
 
     with torch.no_grad():
         model.eval()
-        ### so far, rule of thumb of this sampling timestamps is around 4000
-        timesteps_sample = 4000
-        samples = model(mode="generate", t=t, displacement_shape = (6,3), batch_size = 4, timesteps_sample = timesteps_sample)
-        torch.set_printoptions(precision = 7, sci_mode=False)
-        print("time = ", timesteps_sample, "result =" , samples[-1]*3.535067+4.4975667)
-        
+        timesteps_sample = 500
+        for Step, features in enumerate(test_dataloader):
+            features = features.to(device)
+            samples = model(mode="generate", batch_size = batch_size, timesteps_sample = timesteps_sample,x_start = features)
+            torch.set_printoptions(precision = 7, sci_mode=False)
+            # print("time = ", timesteps_sample, "result =" , samples)
+        pos_result = deepcopy(features.pos)
+        samples = np.array(samples)
+        # print(samples[-1].device)
+        pos_result = pos_result.cpu()
+        pos_result += samples[-1]
+        pos_result = scale_back(pos_result)
+        print(pos_result)
 
 if __name__ == "__main__":
     train()
